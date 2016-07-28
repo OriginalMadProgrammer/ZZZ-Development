@@ -88,7 +88,7 @@ ISBARE_X_SYSERR=255	#specific high-level system troubles
 #       that there is no single way to detect VMs. Worse, the different
 #       vintages of a particular VM can require different detection 
 #       techniques over time.
-#     # for many of the tests, a "VM positive" can be considerd solid.
+#     # for many of the tests, a "VM positive" can be considered solid.
 #       others tests, not so much. this slippery produces fears over 
 #       false positive indications of "bare metal" systems. This results 
 #       in balancing weaker tests against stronger tests and stopping 
@@ -96,7 +96,7 @@ ISBARE_X_SYSERR=255	#specific high-level system troubles
 #
 #  DISCLAIMER
 #    # This is a hodgepodge of tests gathered over many years.
-#      It's organic, messy, growth sould be replaced by something
+#      It's organic, messy, growth should be replaced by something
 #      neater. The upside of it is it seems to work. 
 #
 function isbare 
