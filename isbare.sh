@@ -46,6 +46,12 @@
 #	    you really need, and have tested, VM-vendor specific behavior.
 #     200-255 indicates trouble
 #
+#  RESTRICTIONS:
+#    # If you are going to test string values to determine type,
+#      you may need to run tests in numeric order as some systems
+#      are multiple.... Example: AWS runs under Xen. This is
+#      another factor that can cause numeric reordering.
+#
 #  NOTES:
 #    # Started life under the name "isvirtual", but I soon found
 #      that exit codes of "0" on virtual do not leave much room
@@ -74,7 +80,8 @@ ISBARE_X_VBOX=43;	#VirtualBox from Oracle (previouslly Sun)
 ISBARE_X_MSVPC=44;	#Microsoft Virtual PC
 ISBARE_X_QEMU=45;	#QEMU
 ISBARE_X_KVM=46;	#KVM
-ISBARE_X_XEN=47;	#XEN
+ISBARE_X_XEN_AWS=47;	#ZEN specific to AMAZON
+ISBARE_X_XEN=48;	#XEN
 ISBARE_X_VIRTUOZZO=48;	#Virtuozzo
 
 ISBARE_X_GENERIC=199	#generic VM if specific not known
@@ -123,14 +130,18 @@ function isbare
     	is_virtual_private="";	#suppose not virtual
 				# (guarantees "while" can't iterate again)
 
-	typeset dmesg="$( dmesg --notime | sed -e 's/"/@/g')";
+	typeset dmesg="$( dmesg | sed -e 's/^[:0-9][:0-9]*  *//' -e 's/"/@/g')";
 
-	[ "${is_virtual_private#.bare.}" = "" ] && 	#Linux found virtualizer
-	    is_virtual_private="$( echo "$dmesg" | sed -ne '/Hypervisor detected:/s/.*: *//p' | grep . )" && break;
+	[ "$is_virtual_private" = "" ] &&       #AWS uses Xen... make special test for it
+	    is_virtual_private="$( echo_dmesg | grep '^DMI: Xen .*amazon')" && break;
+
+
+	[ "${is_virtual_private#.bare.}" = "" ] && 	#Linux kernel identified virtualizer
+	    is_virtual_private="$( echo_dmesg | sed -ne '/Hypervisor detected:/s/.*: *//p' | grep . )" && break;
 
 
 	if [ "$is_virtual_private" = "" ] &&
-	    typeset para="$( echo "$dmesg" | grep -i '^Booting paravirtualized kernel' )"; then
+	    typeset para="$( echo_dmesg | grep -i '^Booting paravirtualized kernel' )"; then
 	    # emitted on newer kernels natively supporting VMs
 	    if [[ "$para" == *"bare hardware" ]]; then
 	    	is_virtual_private='.bare.';	#likely bare: but do more tests
@@ -139,8 +150,9 @@ function isbare
 		break;		#solid known VM
 	    fi
 	fi
+
 	[ "$is_virtual_private" = "" ] && 	#Linux bare hardware test
-	    is_virtual_private="$( echo "$dmesg" | grep -qi '^Booting paravirtualized kernel on bare hardware' && echo ".bare." )";
+	    is_virtual_private="$( echo_dmesg | grep -qi '^Booting paravirtualized kernel on bare hardware' && echo ".bare." )";
 
 	if [ $EUID -eq 0 ]; then
 	{   #high-quality checks only root can do
@@ -189,21 +201,21 @@ function isbare
 	} fi
 
 	[ "$is_virtual_private" = "" ] && 
-	    is_virtual_private="$( echo "$dmesg" | egrep -qi '\<vmware\>' && echo "VMware" )" && break
+	    is_virtual_private="$( echo_dmesg | egrep -qi '\<vmware\>' && echo "VMware" )" && break
 	[ "$is_virtual_private" = "" ] && 
-	    is_virtual_private="$( echo "$dmesg" | egrep -qi "\<vbox\>' - .*ACPI:" && echo "VirtualBox" )" && break;
+	    is_virtual_private="$( echo_dmesg | egrep -qi "\<vbox\>' - .*ACPI:" && echo "VirtualBox" )" && break;
 	[ "$is_virtual_private" = "" ] && 
-	    is_virtual_private="$( echo "$dmesg" | egrep -qi 'hd[a-z]: Virtual HD' && echo "VirtualPC" )" && break;
+	    is_virtual_private="$( echo_dmesg | egrep -qi 'hd[a-z]: Virtual HD' && echo "VirtualPC" )" && break;
 	[ "$is_virtual_private" = "" ] && 
-	    is_virtual_private="$( echo "$dmesg" | egrep -qi 'Xen virtual' && echo "Xen" )" && break;
-	[ "$dmesg" == "" ] && 
+	    is_virtual_private="$( echo_dmesg | egrep -qi 'Xen virtual' && echo "Xen" )" && break;
+	echo_dmesg --empty &&
 	    [ $( wc -l /var/log/dmesg | awk '{print $1}' ) -eq 0 ] &&
 	    [ -e /proc/vz ] && ls -al /proc/vz | grep -q veinfo &&
 	    is_virtual_private="Virtuozzo" &&
 	    break;
 
 	### QEMU [ "$is_virtual_private" = "" ] && 
-	###    is_virtual_private="$( echo "$dmesg" | grep -qi "vbox - .*ACPI:" && echo "VirtualBox" )";
+	###    is_virtual_private="$( echo_dmesg | grep -qi "vbox - .*ACPI:" && echo "VirtualBox" )";
 
 	# corse grained information, but rarely fails, test
 	[ "${is_virtual_private#.bare.}" = "" ] && [ -e /proc/cpuinfo ] &&
@@ -219,6 +231,8 @@ function isbare
 	case "$ibp" in
 	   ("" | ".bare.")
 	   		is_exit_private=$ISBARE_X_BARE;;
+	      # order of following can be important
+	   (*amazon*)	is_exit_private=$ISBARE_X_XEN_AWS;;
 	   (*vmware*)	is_exit_private=$ISBARE_X_VMWARE;;
 	   (*v*box*)	is_exit_private=$ISBARE_X_VBOX;;
 	   (*v*pc*)	is_exit_private-$ISBARE_X_MSVPC;;
@@ -233,6 +247,20 @@ function isbare
     } fi
 
     return $is_exit_private;
+}
+
+# print $dmesg variable to standardout without pesky traces under -x debugging
+# --empty option just tests if string is empty or not.
+function echo_dmesg
+{
+ (			#isolate +x to subshell
+   set +x;		#assure -x trace is OFF for this monster text
+   if [ "${1:--}" = "--empty" ]; then
+   	test -z "$dmesg"
+   else
+	echo "$dmesg" 
+   fi
+ )
 }
 
 
@@ -252,25 +280,25 @@ if [[ "/${0##*/}" == /isbare* ]]; then
 	opt="$1"; shift;
 	case "$opt" in
 	    ("--quiet"|"-q")  opt_echo=false;;
-	    ("--shell"|"--xml"|"--yaml") opt_show="true $opt";;
-	    (--)	      break;;
-	    (*)		      echo >&2 "$name0: Unknown option: $opt";
-	    		      xit=$ISBARE_X_TROUBLE;;
-	esac
-    done
-    if [ $# -ge 1 ]; then
-	echo >&2 "$name0: Extra options ($#): $*";
-	xit=$ISBARE_X_TROUBLE;
-    fi
-    
-    if [ $xit -eq $ISBARE_X_BARE ]; then 
-    	# all fine so far... now do the actual work
+		("--shell"|"--xml"|"--yaml") opt_show="true $opt";;
+		(--)	      break;;
+		(*)		      echo >&2 "$name0: Unknown option: $opt";
+				  xit=$ISBARE_X_TROUBLE;;
+	    esac
+	done
+	if [ $# -ge 1 ]; then
+	    echo >&2 "$name0: Extra options ($#): $*";
+	    xit=$ISBARE_X_TROUBLE;
+	fi
+	
+	if [ $xit -eq $ISBARE_X_BARE ]; then 
+	    # all fine so far... now do the actual work
 
-	if $opt_show; then
-	    set | grep '^ISBARE_X_' | sort -t= -k2,2n | {
-		case "$opt_show" in
-		  (*"--shell")	cat;;	#this is EZ!
-		  (*"--xml")	awk -F= '{print "<"$1">"$2"</"$1">"}';;
+	    if $opt_show; then
+		set | grep '^ISBARE_X_' | sort -t= -k2,2n | {
+		    case "$opt_show" in
+		      (*"--shell")	cat;;	#this is EZ!
+		      (*"--xml")	awk -F= '{print "<"$1">"$2"</"$1">"}';;
 		  (*"--yaml")	sed -e 's/=/: /';;
 		  (*)		echo >&2 "$name00 BUG: unexpected opt_show='$opt_show'";
 		  		exit 1;;
