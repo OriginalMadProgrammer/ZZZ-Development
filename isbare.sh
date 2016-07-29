@@ -8,10 +8,19 @@
 # Can be used as standalone script or Borne shell library function.
 #
 # COMMAND:
-#	isbare.sh [--quiet | -q]
+#	isbare.sh [--quiet | -q] [--shell | --xml | --yaml]
 #	
 #	Prints nothing if bare metal or trouble. Else "best guess" 
 #	VM type is printed to standard out.
+#
+#	  --quiet - does not print name of VM to standard out.
+#	  --shell|--xml|--yaml: publishes symbolic names for
+#		    numeric exit codes. If you need to know the
+#		    specific type of VM using the name/value pair
+#		    shown in one of these formats is highly
+#		    recommended as this code is still undef
+#		    development (e.g., subject to change without
+#		    notice).
 #
 # 	Exit codes: 0 for bare metals. Non-zero if VM or trouble 
 #	(see following FUNCTION call returns)
@@ -56,13 +65,17 @@ is_exit_private=256;		#becomes numeric exit (256 is invalid value)
 
 # exit/return codes in no intentional order.
 ISBARE_X_BARE=0;	#bare metal host
-ISBARE_X_VMWARE=1;	#VMWare 
-ISBARE_X_VBOX=2;	#VirtualBox from Oracle (previouslly Sun)
-ISBARE_X_MSVPC=3;	#Microsoft Virtual PC
-ISBARE_X_QEUM=4;	#QEMU
-ISBARE_X_KVM=5;		#KVM
-ISBARE_X_XEN=6;		#XEN
-ISBARE_X_VIRTUOZZO=7;	#Virtuozzo
+  # 1 through 41 reserved for lesser virtulizers, such as dockers.
+  # As code still under development numbers can change without notice,
+  # so see scripts using a library should use the following names.
+  # Users of commands should see --shell, --xml, or --yaml options.
+ISBARE_X_VMWARE=42;	#VMWare  (the first this author used!)
+ISBARE_X_VBOX=43;	#VirtualBox from Oracle (previouslly Sun)
+ISBARE_X_MSVPC=44;	#Microsoft Virtual PC
+ISBARE_X_QEMU=45;	#QEMU
+ISBARE_X_KVM=46;	#KVM
+ISBARE_X_XEN=47;	#XEN
+ISBARE_X_VIRTUOZZO=48;	#Virtuozzo
 
 ISBARE_X_GENERIC=199	#generic VM if specific not known
 ISBARE_X_TROUBLE=200	#general trouble: anything -ge this value is trouble
@@ -113,7 +126,7 @@ function isbare
 	typeset dmesg="$( dmesg --notime | sed -e 's/"/@/g')";
 
 	[ "${is_virtual_private#.bare.}" = "" ] && 	#Linux found virtualizer
-	    is_virtual_private="$( echo "$dmesg" | sed -ne '/Hypervisor detected:/s/.*: *//p' && grep .)" && break;
+	    is_virtual_private="$( echo "$dmesg" | sed -ne '/Hypervisor detected:/s/.*: *//p' | grep . )" && break;
 
 
 	if [ "$is_virtual_private" = "" ] &&
@@ -231,13 +244,15 @@ if [[ "/${0##*/}" == /isbare* ]]; then
     name00="${name0%.*sh}";	#without any .*sh suffix
 
     opt_echo=true;		#suppose will echo any VM type
+    opt_show=false;		#true if printing numbers ($1 is format)
 
     xit=$ISBARE_X_BARE;		#exit code (also "successful exit")
 
-    while [ $# -gt 0 ] && [[ "${1:-}" == "-*" ]]; do
+    while [ $# -gt 0 ] && [[ "${1:-}" == "-"* ]]; do
 	opt="$1"; shift;
 	case "$opt" in
 	    ("--quiet"|"-q")  opt_echo=false;;
+	    ("--shell"|"--xml"|"--yaml") opt_show="true $opt";;
 	    (--)	      break;;
 	    (*)		      echo >&2 "$name0: Unknown option: $opt";
 	    		      xit=$ISBARE_X_TROUBLE;;
@@ -247,9 +262,23 @@ if [[ "/${0##*/}" == /isbare* ]]; then
 	echo >&2 "$name0: Extra options ($#): $*";
 	xit=$ISBARE_X_TROUBLE;
     fi
-
+    
     if [ $xit -eq $ISBARE_X_BARE ]; then 
     	# all fine so far... now do the actual work
+
+	if $opt_show; then
+	    set | grep '^ISBARE_X_' | sort -t= -k2,2n | {
+		case "$opt_show" in
+		  (*"--shell")	cat;;	#this is EZ!
+		  (*"--xml")	awk -F= '{print "<"$1">"$2"</"$1">"}';;
+		  (*"--yaml")	sed -e 's/=/: /';;
+		  (*)		echo >&2 "$name00 BUG: unexpected opt_show='$opt_show'";
+		  		exit 1;;
+		esac
+	    }
+	    exit $?;
+	fi
+
 	is="$(isbare)" || xit=$?;
 	$opt_echo && [ "$is" != "" ] && echo "$is"
     fi
