@@ -217,7 +217,7 @@ function isbare
     {	#first use sets static numeric value: resolve string to return code
 	typeset -l ibp="${is_virtual_private}";
 	case "$ibp" in
-	   ("" | ".bare")
+	   ("" | ".bare.")
 	   		is_exit_private=$ISBARE_X_BARE;;
 	   (*vmware*)	is_exit_private=$ISBARE_X_VMWARE;;
 	   (*v*box*)	is_exit_private=$ISBARE_X_VBOX;;
@@ -229,7 +229,7 @@ function isbare
 
 	   (*)  	is_exit_private=$ISBARE_X_GENERIC;;	#not a clue
 	esac
-	[ $is_exit_private != $ISBARE_X_VMWARE ] && echo "$is_virtual_private"; 
+	[ $is_exit_private != $ISBARE_X_BARE ] && echo "$is_virtual_private"; 
     } fi
 
     return $is_exit_private;
