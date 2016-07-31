@@ -8,19 +8,21 @@
 # Can be used as standalone script or Borne shell library function.
 #
 # COMMAND:
-#	isbare.sh [--quiet | -q] [--shell | --xml | --yaml]
+#	isbare.sh [--quiet | -q] [--shell | --export | --xml | --yaml]
 #	
-#	Prints nothing if bare metal or trouble. Else "best guess" 
-#	VM type is printed to standard out.
+#	Prints nothing to standard out if bare metal or trouble. Else 
+#	the "best guess" VM type is printed to standard out.
 #
 #	  --quiet - does not print name of VM to standard out.
 #	  --shell|--xml|--yaml: publishes symbolic names for
-#		    numeric exit codes. If you need to know the
-#		    specific type of VM using the name/value pair
-#		    shown in one of these formats is highly
-#		    recommended as this code is still undef
+#		    numeric exit codes. If you make decisison based
+#		    on the specific type of VM then using the 
+#		    name/value pair shown in one of these formats is 
+#		    HIGHLY recommended as this code is still under
 #		    development (e.g., subject to change without
 #		    notice).
+#	  --export  Like --shell, but prefixes "export" to each definition.
+#		    eval "$(isbare --export)";  #gather ISBARE_X_* variables
 #
 # 	Exit codes: 0 for bare metals. Non-zero if VM or trouble 
 #	(see following FUNCTION call returns)
@@ -29,6 +31,9 @@
 #
 # FUNCTION CALL
 #	string="$( isbare )";	#check if bare or not
+#	isbare_exit=$?;		#acquire exit code
+#	eval "$( isbare --shell )"; #acquire ISBARE_X_* definitions as
+#				    # LOCAL, and NOT, exported environment.
 #	
 #	String is empty if bare metal or trouble. Else VM type is
 #	put into string.
@@ -46,11 +51,45 @@
 #	    you really need, and have tested, VM-vendor specific behavior.
 #     200-255 indicates trouble
 #
-#  RESTRICTIONS:
-#    # If you are going to test string values to determine type,
-#      you may need to run tests in numeric order as some systems
-#      are multiple.... Example: AWS runs under Xen. This is
-#      another factor that can cause numeric reordering.
+#  RESTRICTIONS ON USING STRING VALUES:
+#    # Where possible string output needs to be treated more as an
+#      interesting log tidbit than serious value to be used.
+#      The basic VM type should be OK, but use the exit code more
+#      than anything else.
+#    # Beware that different versions and combinations of the 
+#      virtualizer, kernel, and distribution can return 
+#      wildly different strings for the same virtualizer type.
+#      Assume string values will be inconsistent over time.
+#      Worse the substring you trigger on can change over time.
+#      It's a bug in your code, not mine, if it fails due to 
+#      a sudden change to string value.
+#    # You may need to run string tests in numeric order as some 
+#      systems are multiple.... Example: AWS runs under Xen. This 
+#      is another factor that can cause numeric reordering.
+#
+#  EXAMPLES:
+#    # Remembering if VM or not and logging type
+#	isbare.sh >>$LOGFILE && isbare=true || isbare="false $?";
+#	isbare.sh >>$LOGFILE && isvm=false  || isvm="true $?";
+#	  case "$isxxx" in	#real programmers check for errors
+#	   (*2*) echo 2>&1 "ISBARE TROUBLE: ${isvm#*2}2";;
+#	  esac
+#    # Remembering type of VM for later use. Also grabs 
+#      numeric VM types.
+#	 eval "$( isbare --export )";
+#	 isbare.sh -q;  
+#	 vmtype=$?;
+#	 if [ $vmtype -ge $ISBARE_X_TROUBLE ]; then
+#	     echo >&2 "TROUBLE: $vmtype";
+#	     exit $vmtype;
+#	 fi
+#	 case $vmtype; in
+#	  ($ISBARE_X_BARE)   echo "Bare Metal";
+#	  ($ISBARE_X_VMBOX)  echo "Virtual Box";;
+#	  ($ISBARE_X_VMWARE) echo "VMWare";;
+#	  ($ISBARE_X_GENERIC) echo "Generic";;
+#	  (*)                echo "Type we don't track";;
+#
 #
 #  NOTES:
 #    # Started life under the name "isvirtual", but I soon found
@@ -58,10 +97,6 @@
 #      to identify the system type to those callers that require it.
 #    # Doesn't really consider containers yet, such as Docker. 
 #      Maybe exits 190+.
-#    # Where possible string needs to be treated more as an
-#      interesting log tidbit than serious value to be used.
-#      The basic VM type should be OK, but use the exit code more
-#      than anything else.
 #      
 
 is_virtual_private=".not set.";	#sticky memory
@@ -86,6 +121,7 @@ ISBARE_X_VIRTUOZZO=48;	#Virtuozzo
 
 ISBARE_X_GENERIC=199	#generic VM if specific not known
 ISBARE_X_TROUBLE=200	#general trouble: anything -ge this value is trouble
+ISBARE_X_TROUBLE_RE='2[0-9][0-9]' # regular expression to notice trouble
 ISBARE_X_SYSERR=255	#specific high-level system troubles
 
 
@@ -156,8 +192,8 @@ function isbare
 
 	if [ $EUID -eq 0 ]; then
 	{   #high-quality checks only root can do
-	    dmidecode="$(which dmidecode 2>/dev/null || true)" 
-	    if [ -x $dmidecode ]; then
+	    if dmidecode="$(which dmidecode 2>/dev/null)" &&
+	       [ -x $dmidecode ]; then
 	    {
 		typeset dmisystem="$(dmidecode -t system | 
 			    egrep '^[[:space:]]*(Manufacturer|Product Name)')";
@@ -167,32 +203,33 @@ function isbare
 			    		sed -ne 's/.*Product Name: *//p' )";
 		typeset vendor="$(  echo "$dmisystem" | 
 			    		sed -ne 's/.*Vendor: *//p' )";
+		typeset dmi="dmi: ";	#prefix to put before DMI deduced names
 		case "${productName:-}" in
 		  ("Microsoft"*)    case "${manufacturer:-}" in
-			               ("Virtual Machine"*) is_virtual_private="MS VirtualPC";
+			               ("Virtual Machine"*) is_virtual_private="${dmi}MS VirtualPC";
 				       			    break 3;;
-			               ("Virtual"*)         is_virtual_private="$productName";
+			               ("Virtual"*)         is_virtual_private="${dmi}$productName";
 				       			    break 3;;
 			            esac;
 			            ;;
-		  ("Standard PC"*)  is_virtual_private="QEMU";
+		  ("Standard PC"*)  is_virtual_private="${dmi}QEMU";
 		  		    break 2;;
-		  (*"VMware"*)      is_virtual_private="VMware";
+		  (*"VMware"*)      is_virtual_private="${dmi}VMware";
 		  		    break 2;;
-		  (*"VirtualBox"*)  is_virtual_private="VirtualBox";
+		  (*"VirtualBox"*)  is_virtual_private="${dmi}VirtualBox";
 		  		    break 2;;
-		  (*HVM*domU*)      is_virtual_private="Xen";
+		  (*HVM*domU*)      is_virtual_private="${dmi}Xen";
 		  		    break 2;;
 		  (*)	case "${manufacturer:-}" in
 			      # product name did not pick: try manufacturer
-			      (*innotek*) is_virtual_private="VirtualBox";
+			      (*innotek*) is_virtual_private="${dmi}VirtualBox";
 			      		  break 3;;
-			      ("QEMU")    is_virtual_private="QEMU";
+			      ("QEMU")    is_virtual_private="${dmi}QEMU";
 			      		  break 3;;
 					 
 			      (*)	  #Prod and Manuf empty... 
 			         	  case "$vendor" in
-			      		    (*QEMU*) is_virtual_private="QEMU";
+			      		    (*QEMU*) is_virtual_private="${dmi}QEMU";
 			      		             break 4;;
 					  esac;;
 			    esac;
@@ -280,7 +317,7 @@ if [[ "/${0##*/}" == /isbare* ]]; then
 	opt="$1"; shift;
 	case "$opt" in
 	    ("--quiet"|"-q")  opt_echo=false;;
-		("--shell"|"--xml"|"--yaml") opt_show="true $opt";;
+		("--shell"|"--export"|"--xml"|"--yaml") opt_show="true $opt";;
 		(--)	      break;;
 		(*)		      echo >&2 "$name0: Unknown option: $opt";
 				  xit=$ISBARE_X_TROUBLE;;
@@ -297,7 +334,8 @@ if [[ "/${0##*/}" == /isbare* ]]; then
 	    if $opt_show; then
 		set | grep '^ISBARE_X_' | sort -t= -k2,2n | {
 		    case "$opt_show" in
-		      (*"--shell")	cat;;	#this is EZ!
+		      (*"--shell")	sed -e 's/$/;/';;
+		      (*"--export")	sed -e 's/^/export /' -e "s/\$/;/";;
 		      (*"--xml")	awk -F= '{print "<"$1">"$2"</"$1">"}';;
 		  (*"--yaml")	sed -e 's/=/: /';;
 		  (*)		echo >&2 "$name00 BUG: unexpected opt_show='$opt_show'";
