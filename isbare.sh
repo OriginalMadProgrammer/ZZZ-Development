@@ -1,7 +1,8 @@
 #! /bin/bash
 # isbare--check if current Linux host is running on bare metal and not virtual.
 # copyright 2016 Gilbert Healton
-# License: GNU Public License 2.0, or any later of your choice.
+# License: GNU Public License 3.0, or any later of your choice.
+#	https://www.gnu.org/licenses/
 #
 #   RESTRICTION: for Linux systems only
 #
@@ -40,7 +41,8 @@
 #
 #   exit/return codes
 #     0: is bare metal host (the simple case... variations are  non-zero)
-#     1-199 indicates virtual hosts
+#     1-2   internal trouble values... should map to 201 and 202 on exit.
+#     3-199 indicates virtual hosts
 #	  # The returned text string also reflects the VM type and
 #           may, perhaps,  provide further details on different versions,
 #	    but only if well documented tests exist.  This string is 
@@ -106,7 +108,11 @@ is_exit_private=256;		#becomes numeric exit (256 is invalid value)
 
 # exit/return codes in no intentional order.
 ISBARE_X_BARE=0;	#bare metal host
-  # 1 through 41 reserved for lesser virtulizers, such as dockers.
+ISBARE_X_OOPS1=1;	#reserved: normal commands use this on trouble
+ISBARE_X_OOPS2=2;	#reserved: another trouble, often from grep
+	# the OOPS# values should map to TROUBLE# values
+
+  # 3 through 41 reserved for lesser virtulizers, such as dockers.
   # As code still under development numbers can change without notice,
   # so see scripts using a library should use the following names.
   # Users of commands should see --shell, --xml, or --yaml options.
@@ -117,10 +123,14 @@ ISBARE_X_QEMU=45;	#QEMU
 ISBARE_X_KVM=46;	#KVM
 ISBARE_X_XEN_AWS=47;	#ZEN specific to AMAZON
 ISBARE_X_XEN=48;	#XEN
-ISBARE_X_VIRTUOZZO=48;	#Virtuozzo
+ISBARE_X_VIRTUOZZO=49;	#Virtuozzo
 
 ISBARE_X_GENERIC=199	#generic VM if specific not known
 ISBARE_X_TROUBLE=200	#general trouble: anything -ge this value is trouble
+ISBARE_X_TROUBLE1=$(( ISBARE_X_OOPS1 + ISBARE_X_TROUBLE ))
+ISBARE_X_TROUBLE2=$(( ISBARE_X_OOPS2 + ISBARE_X_TROUBLE ))
+
+
 ISBARE_X_TROUBLE_RE='2[0-9][0-9]' # regular expression to notice trouble
 ISBARE_X_SYSERR=255	#specific high-level system troubles
 
@@ -311,43 +321,51 @@ if [[ "/${0##*/}" == /isbare* ]]; then
     opt_echo=true;		#suppose will echo any VM type
     opt_show=false;		#true if printing numbers ($1 is format)
 
-    xit=$ISBARE_X_BARE;		#exit code (also "successful exit")
+    xit=$ISBARE_X_BARE;		#exit code (also "successful exit")map to 201 and 202 on exit.
 
+    #process command line "-*" options
     while [ $# -gt 0 ] && [[ "${1:-}" == "-"* ]]; do
+    {   
 	opt="$1"; shift;
 	case "$opt" in
 	    ("--quiet"|"-q")  opt_echo=false;;
-		("--shell"|"--export"|"--xml"|"--yaml") opt_show="true $opt";;
-		(--)	      break;;
-		(*)		      echo >&2 "$name0: Unknown option: $opt";
-				  xit=$ISBARE_X_TROUBLE;;
-	    esac
-	done
-	if [ $# -ge 1 ]; then
-	    echo >&2 "$name0: Extra options ($#): $*";
-	    xit=$ISBARE_X_TROUBLE;
-	fi
-	
-	if [ $xit -eq $ISBARE_X_BARE ]; then 
-	    # all fine so far... now do the actual work
-
-	    if $opt_show; then
-		set | grep '^ISBARE_X_' | sort -t= -k2,2n | {
-		    case "$opt_show" in
-		      (*"--shell")	sed -e 's/$/;/';;
-		      (*"--export")	sed -e 's/^/export /' -e "s/\$/;/";;
-		      (*"--xml")	awk -F= '{print "<"$1">"$2"</"$1">"}';;
-		  (*"--yaml")	sed -e 's/=/: /';;
-		  (*)		echo >&2 "$name00 BUG: unexpected opt_show='$opt_show'";
-		  		exit 1;;
-		esac
-	    }
-	    exit $?;
-	fi
-
-	is="$(isbare)" || xit=$?;
-	$opt_echo && [ "$is" != "" ] && echo "$is"
+	    ("--shell"|"--export"|"--xml"|"--yaml") opt_show="true $opt";;
+	    (--)	      break;;
+	    (*)		      echo >&2 "$name0: Unknown option: $opt";
+			      xit=$ISBARE_X_TROUBLE;;
+	esac
+    } done
+    if [ $# -ge 1 ]; then
+	echo >&2 "$name0: Extra options ($#): $*";
+	xit=$ISBARE_X_TROUBLE;
     fi
+
+    # if show time, the show must go on... 
+    if $opt_show; then
+	set | grep '^ISBARE_X_' | sort -t= -k2,2n | {
+	    case "$opt_show" in
+	      (*"--shell")	sed -e 's/$/;/';;
+	      (*"--export")	sed -e 's/^/export /' -e "s/\$/;/";;
+	      (*"--xml")	awk -F= '{print "<"$1">"$2"</"$1">"}';;
+	  (*"--yaml")	sed -e 's/=/: /';;
+	  (*)		echo >&2 "$name00 BUG: unexpected opt_show='$opt_show'";
+			xit=$ISBARE_X_TROOUBLE;;
+	esac
+    } 
+    else
+    {   # normal operations
+	if [ $xit -eq $ISBARE_X_BARE ]; then 
+	{   # all fine so far... now do the actual detective work
+	    is="$(isbare)" || xit=$?;
+	    $opt_echo && [ "$is" != "" ] && echo "$is"
+	} fi
+    } fi
+
+    case $xit in	#in case of odd command exit, including grep
+      # have tried hard to avoid thise conditions, but let's test anyway
+      ($ISBARE_X_OOPS1) xit=$ISBARE_X_TROUBLE1;;
+      ($ISBARE_X_OOPS2) xit=$ISBARE_X_TROUBLE2;;
+    esac
     exit $xit;
 fi
 
