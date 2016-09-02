@@ -53,14 +53,14 @@
 #       are based on other virtualizer and this code tries to sort out
 #	the highest level virtualizers. Example: AWS uses XEN.
 #
-#   exit/return codes
-#     0: is bare metal host (the simple case... variations are  non-zero)
+#   exit/return codes. See the ISBARE_X_.... definitions for name/value maps.
+#     0: is bare metal host (the simple case)
 #     1-2   internal trouble values... should map to 201 and 202 on return.
 #     3-199 indicates virtual hosts
-#	  # The returned text string also reflects the VM type and
-#           may, perhaps,  provide further details on different versions,
-#	    but only if well documented tests exist.  This string is 
-#	    printed to stdout by the command.
+#	  # The returned text string also reflects the VM type for
+#           logging. Those who like exciting lives may test for values
+#	    within the string to test for variations on a virtualizer. 
+#	    This string is printed to stdout by both the command and function.
 #	  # Safest bet is to look for return of 0 (bare metal), 3-199 (VM),
 #	    and 200+ (trouble), considering the string a useful 
 #	    decoration for logging but don't bet your logic on it unless
@@ -142,20 +142,20 @@ is_exit_private=256;		#becomes numeric exit (256 is invalid value)
 ISBARE_X_BARE=0;	#bare metal host
 ISBARE_X_OOPS1=1;	#reserved: normal commands use this on trouble
 ISBARE_X_OOPS2=2;	#reserved: another trouble, often from grep
-	# the OOPS# values should map to TROUBLE# values
+	# the OOPS# values should map to TROUBLE# values before return.
 
   # 3 through 41 reserved for lesser virtualizers. Perhaps dockers.
   # As code still under development numbers can change without notice,
-  # so see scripts using a library should use the following names.
-  # Users of commands should see --shell, --xml, or --yaml options.
+  # so scripts using return values should use the following names.
+  # Users of commands should see --export, --shell, --xml, or --yaml options.
 ISBARE_X_VMWARE=42;	#VMWare  (the first this author used!)
 ISBARE_X_VBOX=43;	#VirtualBox from Oracle (previously Sun)
 ISBARE_X_MSVPC=44;	#Microsoft Virtual PC
-ISBARE_X_QEMU=45;	#QEMU
-ISBARE_X_KVM=46;	#KVM
-ISBARE_X_XEN_AWS=47;	#XEN specific to AMAZON
-ISBARE_X_XEN=48;	#XEN
-ISBARE_X_VIRTUOZZO=49;	#Virtuozzo
+ISBARE_X_QEMU=46;	#QEMU
+ISBARE_X_KVM=47;	#KVM
+ISBARE_X_XEN_AWS=48;	#XEN embedded in AMAZON
+ISBARE_X_XEN=49;	#XEN
+ISBARE_X_VIRTUOZZO=50;	#Virtuozzo
 
 ISBARE_X_GENERIC=199	#generic VM if specific not known
 ISBARE_X_TROUBLE=200	#general trouble: anything -ge this value is trouble
