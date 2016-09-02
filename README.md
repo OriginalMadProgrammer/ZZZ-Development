@@ -1,5 +1,5 @@
 # ZZZ-Development
-Stuff still under development. 
+Stuff still under development but far enough along to be worth sharing. 
 
 ## isbare.sh
 Check if Linux host is "bare metal". Returns success if so. 
