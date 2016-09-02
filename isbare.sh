@@ -9,6 +9,16 @@
 #
 # Can be used as standalone script or Borne shell library function.
 #
+#   WARRANTY (from GPL):
+#     THERE IS NO WARRANTY FOR THE PROGRAM, TO THE EXTENT PERMITTED BY
+#     APPLICABLE LAW.  EXCEPT WHEN OTHERWISE STATED IN WRITING THE COPYRIGHT
+#     HOLDERS AND/OR OTHER PARTIES PROVIDE THE PROGRAM "AS IS" WITHOUT WARRANTY
+#     OF ANY KIND, EITHER EXPRESSED OR IMPLIED, INCLUDING, BUT NOT LIMITED TO,
+#     THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+#     PURPOSE.  THE ENTIRE RISK AS TO THE QUALITY AND PERFORMANCE OF THE PROGRAM
+#     IS WITH YOU.  SHOULD THE PROGRAM PROVE DEFECTIVE, YOU ASSUME THE COST OF
+#     ALL NECESSARY SERVICING, REPAIR OR CORRECTION.
+#
 # COMMAND:
 #	isbare.sh [--quiet | -q] [--shell | --export | --xml | --yaml]
 #	
@@ -17,14 +27,14 @@
 #
 #	  --quiet - does not print name of VM to standard out.
 #	  --shell|--xml|--yaml: publishes symbolic names for
-#		    numeric exit codes. If you make decisison based
+#		    numeric exit codes. If you make decision based
 #		    on the specific type of VM then using the 
 #		    name/value pair shown in one of these formats is 
 #		    HIGHLY recommended as this code is still under
 #		    development (e.g., subject to change without
 #		    notice).
 #	  --export  Like --shell, but prefixes "export" to each definition.
-#		    eval "$(isbare --export)";  #gather ISBARE_X_* variables
+#		    eval "$(isbare.sh --export)";  #gather ISBARE_X_* variables
 #
 # 	Exit codes: 0 for bare metals. Non-zero if VM or trouble 
 #	(see following FUNCTION call returns)
@@ -33,24 +43,25 @@
 #
 # FUNCTION CALL
 #	source $(which isbare.sh)   #read in as function
-#	eval "$( isbare --shell )"; #acquire ISBARE_X_* definitions as
-#				    # LOCAL, and NOT, exported environment.
 #	 . . .
 #	string="$( isbare )";	#check if bare or not
 #	isbare_exit=$?;		#acquire exit code
 #	
-#	String is empty if bare metal or trouble. Else best guess at
-#	VM type is put into string.
+#	Numeric exit code is best identification of VM type. 
+#       String provides additional information that may be useful
+#       but using it alone may lead to ambiguity as some virtualizers 
+#       are based on other virtualizer and this code tries to sort out
+#	the highest level virtualizers. Example: AWS uses XEN.
 #
 #   exit/return codes
 #     0: is bare metal host (the simple case... variations are  non-zero)
-#     1-2   internal trouble values... should map to 201 and 202 on exit.
+#     1-2   internal trouble values... should map to 201 and 202 on return.
 #     3-199 indicates virtual hosts
 #	  # The returned text string also reflects the VM type and
 #           may, perhaps,  provide further details on different versions,
 #	    but only if well documented tests exist.  This string is 
 #	    printed to stdout by the command.
-#	  # Safest bet is to look for return of 0 (bare metal), 1-199 (VM),
+#	  # Safest bet is to look for return of 0 (bare metal), 3-199 (VM),
 #	    and 200+ (trouble), considering the string a useful 
 #	    decoration for logging but don't bet your logic on it unless
 #	    you really need, and have tested, VM-vendor specific behavior.
@@ -59,18 +70,24 @@
 #  RESTRICTIONS ON USING STRING VALUES:
 #    # Where possible string output needs to be treated more as an
 #      interesting log tidbit than serious value to be used.
-#      The basic VM type should be OK, but use the exit code for
-#      decisions.
-#    # Beware that different versions and combinations of the 
-#      virtualizer, kernel, and distribution can return 
-#      wildly different strings for the same virtualizer type.
-#      Assume string values will be inconsistent over time.
-#      Worse: the substring you trigger on can change over time.
-#      It's a bug in your code, not mine, if your code fails due 
-#      to a sudden change to string value.
-#    # You may need to run string tests in numeric order as some 
-#      systems are multiple.... Example: AWS runs under Xen. This 
-#      is another factor that can cause numeric reordering.
+#      The basic VM type should be OK, but use the numeric 
+#      exit code for decisions.
+#    # String provides additional information that may be useful
+#      but using it alone may lead to ambiguity as some virtualizers 
+#      are embedded in other virtualizers and this code tries to sort out
+#      the highest level virtualizers. Example: AWS uses XEN.
+#      If you DO compare strings:
+#        # order the tests in the numeric order of the return codes to 
+#	   best catch embedded VM situations.
+#	 # Do something sane if the string does not match anything
+#	   your script is expecting. This is has been observed.
+#        # Beware that different versions and combinations of the 
+#          virtualizer, kernel, and distributions can return 
+#          wildly different strings for the same virtualizer type.
+#          Assume string values will be inconsistent over time.
+#        # It's a bug in your code, not mine, if your code fails due
+#	   to a sudden change to string value if the exit value 
+#	   remains unchanged.
 #
 #  EXAMPLES:
 #    # Remembering if VM or not and logging type
@@ -81,7 +98,7 @@
 #	  esac
 #    # Remembering type of VM for later use. Also grabs 
 #      numeric VM types.
-#	 eval "$( isbare --export )";
+#	 eval "$( isbare --export )";	#get numeric exit values
 #	 isbare.sh -q;  
 #	 vmtype=$?;
 #	 if [ $vmtype -ge $ISBARE_X_TROUBLE ]; then
@@ -127,12 +144,12 @@ ISBARE_X_OOPS1=1;	#reserved: normal commands use this on trouble
 ISBARE_X_OOPS2=2;	#reserved: another trouble, often from grep
 	# the OOPS# values should map to TROUBLE# values
 
-  # 3 through 41 reserved for lesser virtulizers. Perhaps dockers.
+  # 3 through 41 reserved for lesser virtualizers. Perhaps dockers.
   # As code still under development numbers can change without notice,
   # so see scripts using a library should use the following names.
   # Users of commands should see --shell, --xml, or --yaml options.
 ISBARE_X_VMWARE=42;	#VMWare  (the first this author used!)
-ISBARE_X_VBOX=43;	#VirtualBox from Oracle (previouslly Sun)
+ISBARE_X_VBOX=43;	#VirtualBox from Oracle (previously Sun)
 ISBARE_X_MSVPC=44;	#Microsoft Virtual PC
 ISBARE_X_QEMU=45;	#QEMU
 ISBARE_X_KVM=46;	#KVM
@@ -307,7 +324,7 @@ function isbare
     return $is_exit_private;
 }
 
-# print $dmesg variable to standardout without pesky traces under -x debugging.
+# print $dmesg variable to standard out without pesky traces under -x debugging.
 # --empty option just tests if string is empty or not.
 function isbare_dmesg
 {
@@ -375,8 +392,8 @@ if [[ "/${0##*/}" == /isbare* ]]; then
 	} fi
     } fi
 
-    case $xit in	#in case of odd command exit, including grep
-      # have tried hard to avoid thise conditions, but let's test anyway
+    case $xit in	#in case of odd command exit, including grep.
+      # have tried hard to avoid these conditions, but let's be sure
       ($ISBARE_X_OOPS1) xit=$ISBARE_X_TROUBLE1;;
       ($ISBARE_X_OOPS2) xit=$ISBARE_X_TROUBLE2;;
     esac
