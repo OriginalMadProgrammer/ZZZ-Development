@@ -5,6 +5,7 @@
 #	https://www.gnu.org/licenses/
 #
 #   RESTRICTION: for Linux systems only
+#   BEWARE: still under development. Documentation may not yet match code.
 #
 # Can be used as standalone script or Borne shell library function.
 #
@@ -31,13 +32,15 @@
 #	Note: local admin might install without .sh suffix.
 #
 # FUNCTION CALL
-#	string="$( isbare )";	#check if bare or not
-#	isbare_exit=$?;		#acquire exit code
+#	source $(which isbare.sh)   #read in as function
 #	eval "$( isbare --shell )"; #acquire ISBARE_X_* definitions as
 #				    # LOCAL, and NOT, exported environment.
+#	 . . .
+#	string="$( isbare )";	#check if bare or not
+#	isbare_exit=$?;		#acquire exit code
 #	
-#	String is empty if bare metal or trouble. Else VM type is
-#	put into string.
+#	String is empty if bare metal or trouble. Else best guess at
+#	VM type is put into string.
 #
 #   exit/return codes
 #     0: is bare metal host (the simple case... variations are  non-zero)
@@ -56,15 +59,15 @@
 #  RESTRICTIONS ON USING STRING VALUES:
 #    # Where possible string output needs to be treated more as an
 #      interesting log tidbit than serious value to be used.
-#      The basic VM type should be OK, but use the exit code more
-#      than anything else.
+#      The basic VM type should be OK, but use the exit code for
+#      decisions.
 #    # Beware that different versions and combinations of the 
 #      virtualizer, kernel, and distribution can return 
 #      wildly different strings for the same virtualizer type.
 #      Assume string values will be inconsistent over time.
-#      Worse the substring you trigger on can change over time.
-#      It's a bug in your code, not mine, if it fails due to 
-#      a sudden change to string value.
+#      Worse: the substring you trigger on can change over time.
+#      It's a bug in your code, not mine, if your code fails due 
+#      to a sudden change to string value.
 #    # You may need to run string tests in numeric order as some 
 #      systems are multiple.... Example: AWS runs under Xen. This 
 #      is another factor that can cause numeric reordering.
@@ -73,8 +76,8 @@
 #    # Remembering if VM or not and logging type
 #	isbare.sh >>$LOGFILE && isbare=true || isbare="false $?";
 #	isbare.sh >>$LOGFILE && isvm=false  || isvm="true $?";
-#	  case "$isxxx" in	#real programmers check for errors
-#	   (*2*) echo 2>&1 "ISBARE TROUBLE: ${isvm#*2}2";;
+#	  case "$isexit" in	#real programmers check for errors
+#	   ($ISBARE_X_TROUBLE_WC) echo 2>&1 "ISBARE TROUBLE: ${isvm#*2}2";;
 #	  esac
 #    # Remembering type of VM for later use. Also grabs 
 #      numeric VM types.
@@ -91,14 +94,26 @@
 #	  ($ISBARE_X_VMWARE) echo "VMWare";;
 #	  ($ISBARE_X_GENERIC) echo "Generic";;
 #	  (*)                echo "Type we don't track";;
+#	 esac;
 #
+#  DISCLAIMER
+#    # This is a hodgepodge of tests gathered over many years.
+#      It had organic, messy, growth that should be replaced by 
+#      something neater. The upside of it is it seems to work. 
+#
+# ALSO DISCOVERED:
+#   #  Not proud.... have incorporated tests for VM's I have not used
+#      from various sources.
+#   #  http://unix.stackexchange.com/questions/89714/easy-way-to-determine-virtualization-technology
+#   #  http://unix.stackexchange.com/questions/3685/find-out-if-the-os-is-running-in-a-virtual-environment
+#   #  http://www.dmo.ca/blog/detecting-virtualization-on-linux/
 #
 #  NOTES:
 #    # Started life under the name "isvirtual", but I soon found
 #      that exit codes of "0" on virtual do not leave much room
 #      to identify the system type to those callers that require it.
 #    # Doesn't really consider containers yet, such as Docker. 
-#      Maybe exits 190+.
+#      Anyone with ideas from experience may pipe in.
 #      
 
 is_virtual_private=".not set.";	#sticky memory
@@ -112,7 +127,7 @@ ISBARE_X_OOPS1=1;	#reserved: normal commands use this on trouble
 ISBARE_X_OOPS2=2;	#reserved: another trouble, often from grep
 	# the OOPS# values should map to TROUBLE# values
 
-  # 3 through 41 reserved for lesser virtulizers, such as dockers.
+  # 3 through 41 reserved for lesser virtulizers. Perhaps dockers.
   # As code still under development numbers can change without notice,
   # so see scripts using a library should use the following names.
   # Users of commands should see --shell, --xml, or --yaml options.
@@ -121,24 +136,22 @@ ISBARE_X_VBOX=43;	#VirtualBox from Oracle (previouslly Sun)
 ISBARE_X_MSVPC=44;	#Microsoft Virtual PC
 ISBARE_X_QEMU=45;	#QEMU
 ISBARE_X_KVM=46;	#KVM
-ISBARE_X_XEN_AWS=47;	#ZEN specific to AMAZON
+ISBARE_X_XEN_AWS=47;	#XEN specific to AMAZON
 ISBARE_X_XEN=48;	#XEN
 ISBARE_X_VIRTUOZZO=49;	#Virtuozzo
 
 ISBARE_X_GENERIC=199	#generic VM if specific not known
 ISBARE_X_TROUBLE=200	#general trouble: anything -ge this value is trouble
+ISBARE_X_SYSERR=255	#specific high-level system troubles
 ISBARE_X_TROUBLE1=$(( ISBARE_X_OOPS1 + ISBARE_X_TROUBLE ))
 ISBARE_X_TROUBLE2=$(( ISBARE_X_OOPS2 + ISBARE_X_TROUBLE ))
 
-
+# expressions callers may find useful for generic error detection
 ISBARE_X_TROUBLE_RE='2[0-9][0-9]' # regular expression to notice trouble
-ISBARE_X_SYSERR=255	#specific high-level system troubles
+ISBARE_X_TROUBLE_WC='2[0-9][0-9]' # shell wild card version for use in `case`
 
 
-	        #  http://unix.stackexchange.com/questions/89714/easy-way-to-determine-virtualization-technology
-		#  http://unix.stackexchange.com/questions/3685/find-out-if-the-os-is-running-in-a-virtual-environment
-		#  http://www.dmo.ca/blog/detecting-virtualization-on-linux/
-	
+
 #
 #   isbare--function to test if local host is a virtual machine or not
 #     # no arguments.
@@ -149,21 +162,19 @@ ISBARE_X_SYSERR=255	#specific high-level system troubles
 #	# if virtual machine
 #	   # stdout: best specific text identify of virtualizer.
 #	   # return: non-zero
-#	# trouble: returns values 100 or higher
+#	# trouble: 
+#	   # stderr often has error message.
+#	   # returns values 200 or higher.
+#        
 #     # a lot of tests are made herein as a simple fact of life is
 #       that there is no single way to detect VMs. Worse, the different
 #       vintages of a particular VM can require different detection 
 #       techniques over time.
 #     # for many of the tests, a "VM positive" can be considered solid.
-#       others tests, not so much. this slippery produces fears over 
-#       false positive indications of "bare metal" systems. This results 
-#       in balancing weaker tests against stronger tests and stopping 
-#       further tests on high-value results.
-#
-#  DISCLAIMER
-#    # This is a hodgepodge of tests gathered over many years.
-#      It's organic, messy, growth should be replaced by something
-#      neater. The upside of it is it seems to work. 
+#       others tests, not so much. slippery conditions produces fears 
+#       over false positive indications of "bare metal" systems. 
+#	This results in balancing weaker tests against stronger tests 
+#	and stopping further tests on high-value results.
 #
 function isbare 
 {
@@ -176,18 +187,18 @@ function isbare
     	is_virtual_private="";	#suppose not virtual
 				# (guarantees "while" can't iterate again)
 
-	typeset dmesg="$( dmesg | sed -e 's/^[:0-9][:0-9]*  *//' -e 's/"/@/g')";
+	typeset dmesg="$( dmesg | sed -e 's/^\[[:. 0-9][:. 0-9]*\]  *//' -e 's/"/@/g')";
 
 	[ "$is_virtual_private" = "" ] &&       #AWS uses Xen... make special test for it
-	    is_virtual_private="$( echo_dmesg | grep '^DMI: Xen .*amazon')" && break;
+	    is_virtual_private="$( isbare_dmesg | grep '^DMI: Xen .*amazon')" && break;
 
 
 	[ "${is_virtual_private#.bare.}" = "" ] && 	#Linux kernel identified virtualizer
-	    is_virtual_private="$( echo_dmesg | sed -ne '/Hypervisor detected:/s/.*: *//p' | grep . )" && break;
+	    is_virtual_private="$( isbare_dmesg | sed -ne '/Hypervisor detected:/s/.*: *//p' | grep . )" && break;
 
 
 	if [ "$is_virtual_private" = "" ] &&
-	    typeset para="$( echo_dmesg | grep -i '^Booting paravirtualized kernel' )"; then
+	    typeset para="$( isbare_dmesg | grep -i '^Booting paravirtualized kernel' )"; then
 	    # emitted on newer kernels natively supporting VMs
 	    if [[ "$para" == *"bare hardware" ]]; then
 	    	is_virtual_private='.bare.';	#likely bare: but do more tests
@@ -198,7 +209,7 @@ function isbare
 	fi
 
 	[ "$is_virtual_private" = "" ] && 	#Linux bare hardware test
-	    is_virtual_private="$( echo_dmesg | grep -qi '^Booting paravirtualized kernel on bare hardware' && echo ".bare." )";
+	    is_virtual_private="$( isbare_dmesg | grep -qi '^Booting paravirtualized kernel on bare hardware' && echo ".bare." )";
 
 	if [ $EUID -eq 0 ]; then
 	{   #high-quality checks only root can do
@@ -248,21 +259,21 @@ function isbare
 	} fi
 
 	[ "$is_virtual_private" = "" ] && 
-	    is_virtual_private="$( echo_dmesg | egrep -qi '\<vmware\>' && echo "VMware" )" && break
+	    is_virtual_private="$( isbare_dmesg | egrep -qi '\<vmware\>' && echo "VMware" )" && break
 	[ "$is_virtual_private" = "" ] && 
-	    is_virtual_private="$( echo_dmesg | egrep -qi "\<vbox\>' - .*ACPI:" && echo "VirtualBox" )" && break;
+	    is_virtual_private="$( isbare_dmesg | egrep -qi "\<vbox\>' - .*ACPI:" && echo "VirtualBox" )" && break;
 	[ "$is_virtual_private" = "" ] && 
-	    is_virtual_private="$( echo_dmesg | egrep -qi 'hd[a-z]: Virtual HD' && echo "VirtualPC" )" && break;
+	    is_virtual_private="$( isbare_dmesg | egrep -qi 'hd[a-z]: Virtual HD' && echo "VirtualPC" )" && break;
 	[ "$is_virtual_private" = "" ] && 
-	    is_virtual_private="$( echo_dmesg | egrep -qi 'Xen virtual' && echo "Xen" )" && break;
-	echo_dmesg --empty &&
+	    is_virtual_private="$( isbare_dmesg | egrep -qi 'Xen virtual' && echo "Xen" )" && break;
+	isbare_dmesg --empty &&
 	    [ $( wc -l /var/log/dmesg | awk '{print $1}' ) -eq 0 ] &&
 	    [ -e /proc/vz ] && ls -al /proc/vz | grep -q veinfo &&
 	    is_virtual_private="Virtuozzo" &&
 	    break;
 
 	### QEMU [ "$is_virtual_private" = "" ] && 
-	###    is_virtual_private="$( echo_dmesg | grep -qi "vbox - .*ACPI:" && echo "VirtualBox" )";
+	###    is_virtual_private="$( isbare_dmesg | grep -qi "vbox - .*ACPI:" && echo "VirtualBox" )";
 
 	# corse grained information, but rarely fails, test
 	[ "${is_virtual_private#.bare.}" = "" ] && [ -e /proc/cpuinfo ] &&
@@ -296,9 +307,9 @@ function isbare
     return $is_exit_private;
 }
 
-# print $dmesg variable to standardout without pesky traces under -x debugging
+# print $dmesg variable to standardout without pesky traces under -x debugging.
 # --empty option just tests if string is empty or not.
-function echo_dmesg
+function isbare_dmesg
 {
  (			#isolate +x to subshell
    set +x;		#assure -x trace is OFF for this monster text
@@ -315,6 +326,7 @@ function echo_dmesg
 #   main program - if executed from command line
 #
 if [[ "/${0##*/}" == /isbare* ]]; then
+{   #command usage
     name0="$(basename "$0")";	#properly get execution name
     name00="${name0%.*sh}";	#without any .*sh suffix
 
@@ -340,18 +352,20 @@ if [[ "/${0##*/}" == /isbare* ]]; then
 	xit=$ISBARE_X_TROUBLE;
     fi
 
-    # if show time, the show must go on... 
+    # determine if showing numeric values or running command
     if $opt_show; then
+    {   # the show must go on
 	set | grep '^ISBARE_X_' | sort -t= -k2,2n | {
 	    case "$opt_show" in
 	      (*"--shell")	sed -e 's/$/;/';;
 	      (*"--export")	sed -e 's/^/export /' -e "s/\$/;/";;
 	      (*"--xml")	awk -F= '{print "<"$1">"$2"</"$1">"}';;
-	  (*"--yaml")	sed -e 's/=/: /';;
-	  (*)		echo >&2 "$name00 BUG: unexpected opt_show='$opt_show'";
-			xit=$ISBARE_X_TROOUBLE;;
-	esac
-    } 
+	      (*"--yaml")	sed -e 's/=/: /';;
+	      (*)		echo >&2 "$name00 BUG: unexpected opt_show='$opt_show'";
+				xit=$ISBARE_X_TROOUBLE;;
+	    esac
+	} 
+    }
     else
     {   # normal operations
 	if [ $xit -eq $ISBARE_X_BARE ]; then 
@@ -366,7 +380,8 @@ if [[ "/${0##*/}" == /isbare* ]]; then
       ($ISBARE_X_OOPS1) xit=$ISBARE_X_TROUBLE1;;
       ($ISBARE_X_OOPS2) xit=$ISBARE_X_TROUBLE2;;
     esac
-    exit $xit;
-fi
+
+    exit $xit;		#explicit command bye-bye
+} fi
 
 #end: isbare
