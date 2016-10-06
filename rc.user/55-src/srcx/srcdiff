@@ -1,0 +1,65 @@
+#! /bin/csh
+#  compare source files via sccs or rcs with common user interface
+#     1993 by Gilbert Healton (based on 1985 scripts, which is why it is csh)
+#	@(#)srcdiff	4.1 21 Mar 1997 10:37:05
+set ExecDir = $0
+set ExecDir = $ExecDir:h
+if ( $0 !~ */* ) set ExecDir = "."
+if ( ! $?Mode ) set Mode = "diff";
+source $ExecDir/src.cfg
+if ( $status ) exit($status);
+
+if ( $#argv < 1 ) then
+	cat <<EOF
+src$Mode - $Mode compare source file using either sccs or rcs, 
+	   as appropriate to system
+   src$Mode [-rrev] <file>
+      rev  - revision level to use. Optional.
+      file - file name to $Mode. Must supply.
+EOF
+	exit(0);
+  endif
+
+set Rev = "";		#suppose no revision informatoin
+if ( $?ArgRev ) then
+	set Rev=$ArgRev;
+  endif
+
+while ( $#argv )
+# {
+    set File = `echo "$1" | sed -e 's/\.up$//'`;
+    shift argv;
+    if ( "$DebugSw" != "" ) echo "File=$File"
+
+    if ( $File =~ \1-r* ) then
+	#set up revision level (sticky: applys to all following till next -r)
+	set Rev = `echo $File | sed -e 's/^-r//'`;
+	if ( "$Rev" == "" ) then
+	    set Rev = $1;
+	    shift argv
+	  endif
+      endif
+
+    if ( $VerboseSw ) echo "&File=$File"
+    if ( $VerboseSw && $Rev ) echo "&Rev=$Rev"
+
+    #verify things look good
+    if ( ! -f $ARCHIVE/$ARprefix$File$ARsuffix ) then
+	    sh -c "echo 1>&2 'FILE $File IS NOT ARCHIVED IN $ARCHIVE DIRECTORY'"
+	    continue
+      endif
+
+    set rev = "";
+    if ( "$Rev" != "" ) set rev = "-r$Rev";
+    if ( $SccsSw ) then
+	    $DebugSw sccs diffs $sArgs $rev $File	
+	    set xstatus = $status
+      else
+	    #need to do REV stuff
+	    $DebugSw rcsdiff $rev $File
+	    set xstatus = $status
+      endif
+  end
+# }
+
+#end: srcdiff

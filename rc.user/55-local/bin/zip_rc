@@ -1,0 +1,12 @@
+#!/bin/ksh
+# tar up rc.user to make it available over http
+# SCOPE: rc.user
+
+cd "$( dirname "$0" )/../../.." || exit $?;
+
+
+find rc.user | grep -v IDEAS | grep -v '\.swp$' |
+    cpio -oa -Hnewc | gzip >public_html/Downloads/rc.user.cpio.gz
+
+( cd public_html && ls -l Downloads/rc.user.cpio.gz )
+

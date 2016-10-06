@@ -1,0 +1,61 @@
+#! /bin/csh
+## find all *.up files in current directory tree, applying as requested
+
+set ExecDir = $0
+set ExecDir = $ExecDir:h
+if ( $0 !~ */* ) set ExecDir = "."
+set Mode='';
+source $ExecDir/src.cfg
+if ( $status ) exit($status);
+
+if ( $#argv >= 1 ) then
+	set Mode = $argv[1];
+	shift;
+  endif
+
+if ( $#argv >= 1  ||  ( $Mode != ''  &&  $Mode != 'delget'  &&  $Mode != 'deledit' &&  $Mode != 'delta' ) ) then
+        cat <<EOF
+srcup [delta | delget | deledit]
+    find *.up files in current directory tree.
+	delta	 - delta the *.up files
+	delget	 - delget the *.up files
+	deledit - deledit the *.up files
+EOF
+	exit 0;
+  endif
+
+
+if ( ! $?EDITOR ) then
+	set EDITOR=/bin/vi
+   endif
+
+set files = `find . -name '*.up' -print`
+
+if ( ."$files" != .  ) then
+	ls -l $files
+
+	if ( $?ArgK ) then
+		set xx = 0;
+		foreach file ( $files )
+			if ( -z $file ) then
+			    if ( $xx == 0 ) then
+				set xx = 1;
+				echo "editing zero-length .up files"
+				sleep 2;
+			      endif  
+set verbose
+			 set dirname = `dirname $file`
+			 set basename = `basename $file`
+			 set filename = `echo $basename | sed -e 's/\.up$//'`
+			 ( ${DebugSw}cd $dirname && ( srcdiff $filename >& $basename; ${DebugSw}$EDITOR $basename ) )
+		         endif
+		  end
+	  endif
+	if ( ."$Mode" != . ) then
+	    foreach file ( $files )
+		set d = `dirname $file`;
+		set f = `basename $file`
+		( cd $d && $DebugSw src$Mode $f ) || echo "NOT COMPLETE: $f";
+	      end
+      endif
+  endif

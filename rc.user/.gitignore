@@ -1,0 +1,13 @@
+arch-*
+*--*
+*..*
+*.swp
+*~
+core*
+install
+makefile
+pushd.pl
+timestamp
+*.tmp
+gdb.*
+*.gdb

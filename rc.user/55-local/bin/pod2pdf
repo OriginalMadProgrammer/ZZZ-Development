@@ -1,0 +1,13 @@
+#! /bin/ksh
+# convert files with pod into pdf files
+# SCOPE: rc.user
+
+for ff in "$@"; do
+    f="${ff%.p?}";		#name without any ".p?" suffix
+    echo "    $f.pdf"
+    pod2man "$ff" > "$f.man" &&
+      groff -man "$f.man" >"$f.ps" &&
+      ps2pdf "$f.ps" >"$f.pdf" && 
+      rm -f "$f."{man,ps}
+  done
+

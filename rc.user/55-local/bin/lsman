@@ -1,0 +1,199 @@
+#! /usr/bin/perl
+# SCOPE: rc.user
+
+$RCS = $Rev = '$Id: lsman,v 1.2 1997/04/02 13:31:54 gilbert Exp $';
+
+@MANPATH=grep( /\S/, split(/\s*:\s*/,$ENV{'MANPATH'}) );
+
+@MANPATH = ( "/usr/man" ) unless @MANPATH;
+
+$ls = "ls -d ";
+
+$NameSw = 0;
+$SingleSw = 0;
+
+while( $ARGV[0] =~ m/^-[a-zA-Z0-9]/ )
+{
+    if ( $ARGV[0] eq "-man" )
+    {
+	&ManPage;
+    }
+    elsif ( $ARGV[0] eq "-1" )
+    {
+	$SingleSw = 1;
+    }
+    elsif ( $ARGV[0] eq "-N" )
+    {
+	$NameSw = 1;
+    }
+    else
+    {
+	$ls .= " $ARGV[0]";
+    }
+    shift @ARGV;
+}
+
+if( @ARGV == 0 )
+{
+    print $Rev, "\n";
+    print STDERR "NO NAMES GIVEN TO SEARCH\n";
+    exit(1);
+}
+
+$PWD = $ENV{'PWD'};
+for ( $p = 0; $p < @MANPATH; $p++ )
+{   #fix up common problems in $ENV{'MANPATH'} members
+    $_ = $MANPATH[$p];
+    s"//+""g;			#strip redundant slashes
+    $_ = $PWD if $_ eq ".";	#watch for local dir
+    s"^\./"$PWD/";		#expand current directory
+    s"^([^/])"$PWD/$1";		#relative paths to absolute
+    while( s"/([^/]+)/\.\./"" )
+    {  #eat up any ".." 
+    }
+    $MANPATH[$p] = $_;		#put it back
+}
+
+%Hits = ();
+local(@Matches);
+local($Section);
+foreach $arg ( @ARGV )
+{
+    if ( $arg =~ /^\d\D?$/  ||  $arg eq "l"  )
+    {   #section for manual page
+	$Section = $arg;
+	next;
+    }
+    local($Dirs) = "*${Section}*/";
+    local($pathx) = 
+       join( "/$Dirs${arg}.*$Section* ", @MANPATH ) . "/$Dirs${arg}.*$Section*";
+    if (open( LS, "ls -d $pathx 2>/dev/null |"))
+    {   # pipe opened 
+	local($Arg) = $arg;
+	$Arg =~ s/\./\\./g;	# convert file name wild card to perl regxp
+	$Arg =~ s/\+/\\+/g;
+	$Arg =~ s/\*/.*/g;
+	$Arg =~ s/\?/./g;
+
+	while( <LS> )
+	{
+	   next if /^total/;
+	   next if /not found *$/;
+	   if ( /^\S+:\s*$/ )
+	   {
+	      next;
+	   }
+
+	   next unless m"^.*[^/]*$Arg[^/]*$"; #must match last entry in path
+	   s/\s*$//;
+	   next if $Hits{$_};
+	   $Hits{$_} = 1;
+	   push( @Matches, $_ );
+
+	   last if $SingleSw;
+	}
+	close(LS);
+    }
+}
+system( "$ls " . join( " ", @Matches ) ) if @Matches;
+exit($?);
+
+
+########################################################################
+
+sub ManPage
+{
+    if ( $RCS )
+    {
+	@Id = split( /\s+/, $Id );		#split into fields
+
+	print ".\n";
+	print ".ds 7i $Id\n";
+	print ".ds 7d ", $Id[3], "\n";	#revision date
+	print ".ds 7r ", $Id[2], "\n";	#revision
+	print ".\n";
+    }
+    else
+    {
+	## @(#)termcap.src 1.33 89/03/22 SMI; from UCB 5.28 6/7/86
+	@Id = split( /\s+/, $Id );		#split into fields
+
+	print ".\n";
+	print ".ds 7i $Id\n";
+	print ".ds 7d ", $Id[2], "\n";	#revision date
+	print ".ds 7r ", $Id[3], "\n";	#revision
+	print ".\n";
+    }
+
+    while( <DATA> )
+    {
+	print $_;
+    }
+    exit(0);
+}
+
+
+#end: pather
+__END__
+.\"       _____                  __________                        
+.\"      /     \ _____    ____   \______   \_____     ____   ____  
+.\"     /  \ /  \\__  \  /    \   |     ___/\__  \   / ___\_/ __ \ 
+.\"    /    Y    \/ __ \|   |  \  |    |     / __ \_/ /_/  >  ___/ 
+.\"    \____|__  (____  /___|  /  |____|    (____  /\___  / \___  >
+.\"            \/     \/     \/                  \//_____/      \/ 
+.\"
+.
+.TH lsman 1 \*(7d "Mad Programmer Software" "Free Software"
+.SH NAME
+lsman \- list directories on MANPATH where manual pages exist.
+.
+.SH SYNOPSIS
+\0\fBlsman\fP [\fB\-man\fP] [\fB\-xxx\fP] [\fIsection\fP] \fIpages\fP
+.
+.
+.SH DESCRIPTION
+Searches the standard MANPATH for the indicated files.
+The file name wild cards of "*?[]" are supported,
+but wild carded names must be quoted on the command line.
+.LP
+Any matching manual pages are listed using \fBls\fP(1) format.
+.
+.
+.
+.SH OPTIONS
+Most \fBls\fP(1) options are supported.
+A \fB\-d\fP is always forced to ensure matching directory names are listed
+rather than the contents of those directories.
+.LP
+An option of \fB\-man\fP will print this manual page in unformatted
+roff output.
+No other output is made.
+.LP
+\fIsection\fP is the optial section number for the man page.
+If omitted, all sections are searched.
+.LP
+\fIpages\fP is the name of the pages to search for, without section numbers.
+Both \fIsection\fP and \fBpages\fP are given in the same fromat
+\fBman\fP(1) accepts them.
+.nf
+.LP
+   lsman \-man | nroff \-man | more \-s
+.fi
+.
+.
+.
+.SH ENVIRONMENT
+The MANPATH environment is used to determine what manual page files to list.
+If MANPATH is empty or not defined, the default is \fB/usr/man\fP.
+.
+.
+.
+.SH SEE ALSO
+\fBls(1)\fP,
+\fBman(1)\fP,
+\fBperl(1)\fP
+.
+.
+.
+.\"end: lsman
+

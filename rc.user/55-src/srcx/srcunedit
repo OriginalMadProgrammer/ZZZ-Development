@@ -1,0 +1,92 @@
+#! /bin/csh
+#  discard existing source edit via sccs or rcs with common user interface
+#     1993 by Gilbert Healton
+#	@(#)srcunedit	4.3 21 Mar 1997 10:58:24
+set ExecDir = $0
+set ExecDir = $ExecDir:h
+set Mode = "unedit";
+if ( $0 !~ */* ) set ExecDir = "."
+source $ExecDir/src.cfg
+if ( $status ) exit($status);
+
+if ( $#argv < 1 ) then
+	cat <<EOF
+srcunedit - discard an existing edit
+   srcunedit <file>
+      file - file name to edit. Must supply.
+EOF
+	exit(0);
+  endif
+
+while( $#argv )
+# {
+    set File = `echo "$1" | sed -e 's/\.up$//'`;
+    shift argv
+
+    if ( $VerboseSw ) echo "&File=$File"
+
+    #verify things look good
+    if ( ! -f $ARCHIVE/$ARprefix$File$ARsuffix ) then
+	sh -c "echo 1>&2 'FILE $File IS NOT ARCHIVED IN $ARCHIVE DIRECTORY'"
+	exit(1);
+      endif
+    set Inhibit = 0;
+    if ( $?AReditfix ) then
+	    if ( ! -f $ARCHIVE/$AReditfix$File$ARsuffix ) then
+		sh -c "echo 1>&2 'FILE $File IS NOT CURRENTLY BEING EDITED'"
+		set Inhibit = 1
+	      endif
+      endif
+    if ( ! -w $File  ||  $Inhibit != 0 ) then
+	# read-only file OR unedit inhibited for some reason
+	if ( $Inhibit == 0 ) \
+	    sh -c "echo 1>&2 'WRITABLE $File DOES NOT EXIST IN CURRENT DIRECTORY'"
+	if ( -f $File ) continue;	#aparently not our file
+	if ( -f ${File}.up ) then
+	    if ( ! -w ${File}.up ) then
+		sh -c "echo 1>&2 'READ ONLY ${File}.up EXISTS IN CURRENT DIRECTORY'"
+		continue
+	      endif
+	  endif	
+	set xstatus = 0;		#no file: fake successful unedit/unlock
+      else
+	# file is writable and unedit still active
+	if ( -f ${File}.up ) then
+	    if ( ! -w ${File}.up ) then
+		sh -c "echo 1>&2 'READ ONLY ${File}.up EXISTS IN CURRENT DIRECTORY'"
+		continue
+	      endif
+	  endif	
+
+	if ( $SccsSw ) then
+		$DebugSw sccs unedit $sArgs $File	
+		set xstatus=$status;
+	  else
+		#need to do REV stuff
+		$DebugSw rcs -u $File
+		set xstatus=$status;
+	  endif
+      endif	
+
+    if ( ! $xstatus  &&  $Inhibit == 0 ) then
+	    if ( -f $File ) then
+		echo "removing ${File}"
+		$DebugSw rm -f $File;	#ensure changes removed
+	      endif
+	    if ( -f ${File}.up ) then
+		echo "removing ${File}.up"
+		$DebugSw rm -f ${File}.up;	#remove "up" file
+	      endif
+
+	    #check if should replace link
+	    test \! -f $File  -a  -h $ARCHIVE  -a  -f "$ARCHIVE/$ARprefix$File$ARsuffix" -a  -f "$ARCHIVE/../$File"
+	    if ( $status == 0 ) then
+		set TargetDir = `cd $ARCHIVE/.. && pwd`;
+		if ( $status != 0 ) continue
+		echo "making symbolic link $File -> $TargetDir/$File"
+		ln -s $TargetDir/$File
+	      endif
+      endif
+  end
+# }
+#end: rcsunedit

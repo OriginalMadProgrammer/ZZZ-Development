@@ -1,0 +1,60 @@
+#!/usr/bin/env perl
+# Move files to recycle bin
+#
+# SCOPE: rc.user ZZZZ
+
+use strict;
+use POSIX qw( strftime );
+use File::Basename;
+
+$ENV{'RECYCLE_HOME'} = "$ENV{'HOME'}/RecycleBin" 
+	unless $ENV{'RECYCLE_HOME'};
+
+my $esc = '%';
+my $esc2 = ':';
+
+
+my $esc_qm = quotemeta $esc;
+
+if ( @ARGV )
+{
+    #remove file
+    if ( ! -d $RECYCLE_HOME )
+    {
+    	mkdir $RECYCLE_HOME ||
+		die "CAN NOT MKDIR $RECYCLE_HOME: $!";
+    }
+
+    foreach my $f ( @ARGV )
+    {
+	my $basename_f = basename $f;
+	my $dirname_f  = dirname $f;
+	if ( -e "$f" )
+	{
+	    ( my $dir_esc = "$( cd "$dirname_f)" && pwd )" ) =~ s|/|$esc_qm|g;
+	    my $ds = strftime( '%Y%m%dT%H%M%S,%N', localtime );
+	    ( my $ds_sec = $ds ) =~ s/,.*//;
+	  UNIQUE_SEEK:
+	    for ( my $unique = 0; ; $unique++ )
+	    {
+		my $u = $unique ? $unique : "";
+		my $recycle_name = "$ds$esc$dir_esc$esc$basename_f"
+		if ( length($recycle_name) > 255 )
+		{	#need shorter name
+		    my @stat = stat($f) or { print "CAN NOT STAT $f: $!\n": next; }
+		    my $stat = join($esc, $stat[0], $stat[1] );
+		    $recycle_name = "$ds$esc2$stat$esc2$basename_$f";
+		    if ( length($recycle_name) > 255 )
+		    {
+			$recycle_name = substr( $recycle_name, 0, 120 ) . '----' .
+					substr( $recycle_name, -1, 120 );
+		    }
+		}
+	}
+	else
+	    echo "FILE NOT FOUND: $f";
+	fi
+
+    done
+}
+

@@ -1,0 +1,298 @@
+#! /usr/bin/perl
+# SCOPE: rc.user
+
+$Id = "@(#)lsperl	1.8 5/2/97 17:23:10";
+$RCS = undef;
+
+@PERLPATH = ();
+push( @PERLPATH, grep( /\S/, split(/\s*:\s*/,$ENV{'PERL5LIB'}) ) )
+		if exists $ENV{'PERL5LIB'};
+push( @PERLPATH, grep( /\S/, split(/\s*:\s*/,$ENV{'PERLLIB'}) ) )
+		if exists $ENV{'PERLLIB'};
+
+push( @PERLPATH,
+	map { m|^\s+(/\S+)\s*$| ? $1 : () } split( /\n/, qx( perl -V ) ) );
+
+
+@PERLPATHmore = ();		#nothing for --all right now
+
+
+$ls = "ls ";		#ls command to show files
+
+while( $ARGV[0] =~ m/^--?[a-zA-Z0-9]/ )
+{
+    if ( $ARGV[0] eq "--man" )
+    {
+	&ManPage;
+    }
+    elsif ( $ARGV[0] eq "--all" )
+    {   #search all commonly used places for files
+	local($d);
+	foreach $d ( @morePERLPATH )
+	{   #push onto @PERLPATH any directories in @morePERLPATH that are NOT duplicate
+	    push( @PERLPATH, $d ) if ( ( ! grep { $_ eq $d } @PERLPATH )  &&  -d $d );
+	}
+    }
+    else
+    {
+	$ls .= " $ARGV[0]";
+    }
+    shift @ARGV;
+}
+
+
+if( @ARGV == 0 )
+{
+    print STDERR "NO NAMES GIVEN TO SEARCH\n";
+    exit(1);
+}
+
+{   #fix common problems in $ENV{'PERLPATH'} members
+    $PWD = $ENV{'PWD'};
+    for ( $p = 0; $p < @PERLPATH; $p++ )
+    {   #fix up common problems in $ENV{'PERLPATH'} members
+	$_ = $PERLPATH[$p];
+	s"//+""g;			#strip redundant slashes
+	$_ = $PWD if $_ eq ".";		#watch for local dir
+	s"^\./"$PWD/";			#expand current directory
+	s"^([^/])"$PWD/$1";		#relative paths to absolute
+	while( s"/([^/]+)/\.\./"" )
+	{  #eat up any ".." 
+	}
+	$PERLPATH[$p] = $_;		#put it back
+    }
+}
+
+{   #cull PERLPATH for duplicate names
+    local(@Tmp,%Tmp);
+
+    grep { s"/+$"" } @PERLPATH;		#remove redundant trailing /'s
+    	 ### DO NOT SORT: keep PERLPATH order
+
+    @Tmp = grep{ $Tmp{$_}++ == 0 } @PERLPATH;	#find unique names
+
+    @PERLPATH = @Tmp;			#keep just unique names
+}
+
+{   #determine which directories are physcially present
+    local(@PathsUnique,%PathCache);
+    while( @PERLPATH )
+    {
+	$_ = shift @PERLPATH;
+	next if $_ eq '';
+	next if defined $PathCache{$_};
+
+	local(@Stat) = stat $_;		#attempt the stat
+
+	$PathCache{$_} = @Stat ? scalar( @Stat ) : 0;	#remember if found
+
+	next unless @Stat;	#not found: ignore directory
+	next unless -d $_;	
+
+	push( @PathsUnique, $_ );	#push good entry back onto queue
+    }
+
+    @PERLPATH = @PathsUnique;
+    		#NOTE: this preserves the original PERLPATH order, 
+		##just dropping invalid entries
+
+    @PERLPATH || die "NO PERLPATHs TO SEARCH\n";
+}
+
+
+
+{   # figure out what file system each directory belongs on
+	#  if deleting duplicate by I-node numbers (would like to do),
+	#  ##must keep I-node numbers relative to file system.
+    $_ = "df -k " . join( " ", @PERLPATH );
+    open( DF, "$_ |" )
+    		|| die "CAN NOT execute \`df\`\n";
+    $_ = <DF>;				#discard header
+    local(@DF) = <DF>;
+    close(DF);
+
+    %FileSystem = ();
+    local(@tmpPERLPATH) = @PERLPATH;
+    while( @DF )
+    {    #determine file system for each file
+	 @tmpPERLPATH  ||  die "BUG";		#expect one-for-one match
+	 local($Dir) = shift @tmpPERLPATH;	#get corrsponding directory name
+	 $_ = shift( @DF );
+	 while ( $DF[0] =~ /^\s\s/ )
+	 {   #continued line
+	    $_ =~ s/\s+$//;
+	    $_ .= shift( @DF );	
+	 }
+
+	 ##   Typical:  /dev/amrd0s3a   1012974 329408 602530    35%    /
+	 ##   HP-UX:    /tmp       (/dev/vg00/tmp  ) : 5687123 total .....
+	 m|^\s*(/\S*)\s.*?(/[^\s()]*)| ||  die "BUG: did not parse df: $_";
+	 $FileSystem{$2} = $1;		#keep this for our records
+	 $FileSystem{$Dir} = $1; 	#map directory in PERLPATH to file system
+    }
+
+    ( @tmpPERLPATH  ||  @DF ) && die "BUG";	#expect one-for-one match
+}
+
+{   #do the actual searches
+    local(@Matches);
+    local(%Hits);
+    foreach $argx ( @ARGV )
+    {
+	$arg = $argx;
+	$arg =~ s"//+""g;			#strip redundant slashes
+	$arg = $PWD if $arg eq ".";		#watch for local dir
+	$arg =~ s"^\./"$PWD/";		#expand current directory
+	while( $arg =~ s"/([^/]+)/\.\./"" )
+	{
+	}
+	$arg .= ".p?" unless $arg =~ m/\.p.$/;
+	$arg =~ s"::"/"g;
+	local($pathx) = join( "/$arg ", @PERLPATH ) . "/$arg";
+	$_ = "ls -d $pathx 2>/dev/null";
+	if (open( LS, "$_ |"))
+	{   # pipe opened 
+	    local($Arg) = $arg;
+	    $Arg =~ s/\./\\./g;	# convert file name wild card to perl regxp
+	    $Arg =~ s/\+/\\+/g;
+	    $Arg =~ s/\*/.*/g;
+	    $Arg =~ s/\?/./g;
+
+	    while( <LS> )
+	    {
+	       next if /^total/;
+	       next if /not found *$/;
+	       if ( /^\S+:\s*$/ )
+	       {
+		  next;
+	       }
+
+	       next unless m"/$Arg\s*$"; #must match entry in path
+	       s/\s*$//;
+	       next if $Hits{$_};
+
+	       ### have a name that matches current entry
+	       $Hits{$_} = 1;
+	       push( @Matches, $_ );
+	    }
+	    close(LS);
+	}
+    }
+
+    system( "$ls -d " . join( " ", @Matches ) ) if @Matches;
+
+}
+
+exit(0);
+
+
+########################################################################
+
+sub ManPage
+{
+    if ( $RCS )
+    {
+	@Id = split( /\s+/, $Id );		#split into fields
+
+	print ".\n";
+	print ".ds 7i $Id\n";
+	print ".ds 7d ", $Id[3], "\n";	#revision date
+	print ".ds 7r ", $Id[2], "\n";	#revision
+	print ".\n";
+    }
+    else
+    {
+	## @(#)termcap.src 1.33 89/03/22 SMI; from UCB 5.28 6/7/86
+	@Id = split( /\s+/, $Id );		#split into fields
+
+	print ".\n";
+	print ".ds 7i $Id\n";
+	print ".ds 7d ", $Id[2], "\n";	#revision date
+	print ".ds 7r ", $Id[3], "\n";	#revision
+	print ".\n";
+    }
+    print ".de 7w\n\\\&", 
+    	join( "\n.br\n\\\&", @morePERLPATH ), "\n..\n";
+
+    while( <DATA> )
+    {
+	print $_;
+    }
+    exit(0);
+}
+
+
+#end: pather
+__END__
+.\"       _____                  __________                        
+.\"      /     \ _____    ____   \______   \_____     ____   ____  
+.\"     /  \ /  \\__  \  /    \   |     ___/\__  \   / ___\_/ __ \ 
+.\"    /    Y    \/ __ \|   |  \  |    |     / __ \_/ /_/  >  ___/ 
+.\"    \____|__  (____  /___|  /  |____|    (____  /\___  / \___  >
+.\"            \/     \/     \/                  \//_____/      \/ 
+.\"
+.
+.TH lsperl 1 \*(7d "Mad Programmer Software" "Free Software"
+.SH NAME
+lsperl \- list directories for perl modules.
+.
+.SH SYNOPSIS
+\0\fBlsperl\fP [\fB\-\-man\fP] [\fB\--all\fP] [\fB\-xxx\fP] files
+.
+.
+.SH DESCRIPTION
+Searches the standard perl locations for matching library files.
+Matching files are listed in the style of the \fBls\fP(1) command.
+.LP
+While the file name wild cards of "*?[]" are supported,
+wild carded names must be quoted on the command line if the shell reading
+the command is not to expand the wild cards.
+.
+.
+.
+.SH OPTIONS
+Most \fBls\fP(1) options are supported.
+A \fB\-d\fP is always passed to \fBls\fP(1) 
+to ensure matching directory names are listed rather than 
+the contents of those directories.
+.LP
+\fB\-\-all\fP extends the setting of \fBPERLPATH\fP to search in 
+directories executables are often stored on in different systems.
+This follows the concept of the \fBwhereis\fP(1) command, 
+but with additional directories.
+The current additional directories are
+.RS
+.LP
+.7w
+.RE
+.LP
+NOTE: only directories not already in PERLPATH are added to the search path.
+The actual value of the PERLPATH environment variable is not altered.
+.
+.LP
+\fB\-\-man\fP prints this manual page in unformatted
+roff output.
+No other output is made.
+.nf
+.LP
+   lsperl \-\-man | nroff \-man | more \-s
+.fi
+.
+.
+.
+.SH ENVIRONMENT
+The PERLLIB and PERL5LIB environment variables are 
+is used to determine what files to list.
+Only entries whose first character is "/" are searched.
+.
+.
+.
+.SH SEE ALSO
+\fBls(1)\fP,
+\fBperl(1)\fP
+.
+.
+.
+.
+.\"end: lsperl
+

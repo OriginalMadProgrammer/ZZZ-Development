@@ -1,0 +1,23 @@
+#! /usr/bin/perl
+# program to remove clutter from script(1) log files
+#  # RESTRICTION: can be thrown by really odd overprinting
+#  # RESTRICTION: does not handle vi(), or other "curses(3)" driven output.
+# SCOPE: rc.user
+
+while (<>) {
+    #remove escape codes
+    s/ \e[ #%()*+\-.\/]. |
+       (?:\e\[|\x9b) [ -?]* [@-~] | # CSI ... Cmd
+       (?:\e\]|\x9d) .*? (?:\e\\|[\a\x9c]) | # OSC ... (ST|BEL)
+       (?:\e[P^_]|[\x90\x9e\x9f]) .*? (?:\e\\|\x9c) | # (DCS|PM|APC) ... ST
+       \e.|[\x80-\x9f] //xg;
+
+       #other codes last (escape can hold binary data with following values)
+    s/\r\n/\n/g;		#convert regular end-of lines to \n
+    s/^.*\r//gm;		#delete text to overprint on this line
+    s/ \r | 		# Remove extra carriage returns also
+       \a //xg; 	# delete BEL code for beeps or alarms
+    1 while s/[^\b][\b]//g;  # remove all non-backspace followed by backspace
+    print;
+}
+

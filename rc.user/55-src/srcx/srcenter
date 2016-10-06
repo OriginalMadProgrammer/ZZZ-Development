@@ -1,0 +1,13 @@
+#! /bin/csh
+#  srcenter - enter new file into archive then check it out for editing
+#     1993 by Gilbert Healton (based on 1985 scripts, which is why it is csh)
+#	@(#)srccreate	4.2 20 Mar 1997 17:36:50
+set ExecDir = $0
+set ExecDir = $ExecDir:h
+if ( $0 !~ */* ) set ExecDir = "."
+
+set Mode = "enter";
+source $ExecDir/srcdelta
+exit($status)
+
+

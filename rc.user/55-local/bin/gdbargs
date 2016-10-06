@@ -1,0 +1,68 @@
+#! /bin/bash
+#  gdbargs [--tmpdir=xxx] command arguments
+#  # run command under gdb with given options
+#  # options
+#      --tmpdir=xxx  temporary directory to write working file in.
+#		     default is "/tmp"
+#  # RESTRICTIONS:
+#     # Can not pipe output of gdb, including this cript, to another
+#       program. See "Debugging with GDB", "4.2 Starting your Program".
+#
+# SCOPE: rc.user
+
+set -x;
+
+opt_debug=false;
+opt_tmpdir="/tmp";
+
+die () { x=$?; echo >&2 "DIE: $*"; if [ $x -eq 0 ]; then x=1; fi; exit $x; }
+
+gdbargs ()
+{
+    echo >&2 "gdb with arguments by Gilbert Healton" 
+
+    set -e;
+
+    typeset cmd="$1"; shift;			#get command to run
+    typeset cmd0="$(basename "$cmd")";		#isolate command name
+
+    file_gdb="$opt_tmpdir/gdbargs.$USER.$cmd0";	#argument file
+    rm -rf "$file_gdb"
+    set -x;
+
+    # redirect application's stdin, which may be a pipe, to known fd
+    fd_alt=8;
+    set $fd_alt<&0; 		#define alias to stdin on known FD
+
+    #build initial commands to run
+    trap 'rm -rf "$file_gdb" && echo >&2 "Removed $file_gdb"' EXIT
+    touch  "$file_gdb"               		#assure file exists 
+    chmod 0600 "$file_gdb"			#set perms while zero-length
+    echo >>"$file_gdb" "set verbose";		#write argument file
+    echo >>"$file_gdb" "set args" "$@";		#write argument file
+    $opt_debug && cat -n "$file_gdb" && ls -l "$file_gdb" 
+
+    $opt_debug && echo \
+    gdb -x "$file_gdb" "$cmd" "</dev/tty"
+    gdb -x "$file_gdb" "$cmd" <"/dev/tty"
+    typeset xreturn=$?;
+    set +x;			#clear any traces
+    return $xreturn;
+}
+
+while [ $# -ge 1 ] && [[ "$1" == --* ]]; do
+   cmd="$1"; shift;
+   case "$cmd" in
+     --debug)    opt_debug=true;;
+     --tmpdir=*) opt_tmpdir="${cmd#*=}";; 
+     --)  break;;
+     *) die "Invalid command $cmd";;
+   esac
+
+done
+
+gdbargs "$@"
+
+exit $?
+
+#end

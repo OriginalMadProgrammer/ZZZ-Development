@@ -1,0 +1,1390 @@
+#! /usr/bin/perl
+#rawhtml -- sample socket client code to get web page
+# SCOPE: rc.user
+
+#  read or write raw html responses (replaced by curl/GET, for most part)
+#
+#  usage
+#	rawhtml  [--post | --head] [--base url] [--...] \
+#	       [http:]//host[:port]/remaining_URL
+#			[field1=value1 [field2=value2 [...]]]
+#	   * queries given host using HTTP protocol. The raw response is
+#	     written to standard out. 
+#		See @Args below for additional help on options.
+#
+#	rawhtml --listen port 401
+#	   * Starts listening for GET requests (i.e., for simple browser
+#	     requests) on the given port.
+#	   * Copies the incoming queries, in raw form, to standard out.
+#	     This is the main purpose of the --listen option: viewing
+#	     a query from a particular browser.
+#	   * Responds with simple built-in page to keep the browser client
+#	     happy.
+#
+#  subroutine calling sequence
+#	my $rawhtml = `which rawhtml`;		#find executable
+#	$rawhtml =~ s/\s+$//;			#wipe trailing white space
+#	if ( $rawhtml eq ''  ||  ! -x $rawhtml ) die "NOT FOND: rawhtml\n";
+#	  . . .
+#	( $Error, $ErrorText, $Return, $HttpRev, $Code )
+#			&rawhtml::GetHtml( \*STDOUT, @Argv );
+#	$Error = scalar( &rawhtml::GetHtml( \*STDOUT, @Argv );
+#
+#	Arguments: 
+#	  \*$STOUT: reference to a FileHandle to which diagnostic messages
+#	   	are printed. undef if messages are NOT to be printed.
+#	@Args: options in the form of command line arguments.
+#		--post:	Use POST processing rather than GET (e.g., look like form)
+#		--agent	x: report ourselves to the server as "x" in agent field.
+#		--base u: base URL. Any following relative URLs made absolute
+#			to this URL.
+#		--referrer u: report to server that u is the URL containing
+#		 	the referring hyperlink.
+#
+#		http://url.to.fetch/
+#			URL to retrieve. Only one URL may be provided.
+#			NOTE: only http requests are supported at this time.
+#			incomplete hooks for other protocols exist, but
+#			are not guaranteed. In fact, some definetly fail.
+#
+#		field=value: any number of field=value settings may be used
+#			to set "form field" values by name. Each field name
+#			is expected to be unique.
+#	  
+#
+#	Returns:
+#	  $Error: error code. zero or undefined if success. 
+#		Non-zero number on problem. HTTP errors return standard
+#	        threed-digit error coded (e.g., 404 not found).
+#	        one and two digit values refelect internal errors.
+#		999 is another "unknown" error.
+#	      *	In scaler context &GetHtml just returns an error code. For
+#		some very severe problems in the calling sequence, scaler
+#		calls will die() rather than return. In array context the
+#		error text is set (these errors tend to be near impossible to
+#	  	puzzle out without additional details).
+#	  $ErrorText: textual description of error.
+#	  $Return: text returned by the httpd request.
+#	  $HttpRev: revesion level of the httpd returned by the server.
+#	  $Code: three-digit success/failure code returned by web server
+#		(e.g., 400 is success). Often same as $Error on errors.
+#
+#  disclaimer
+#    * while useful for its limited job, this program is still an
+#      unsupported hack.
+#
+
+package rawhtml;
+
+$Rev = '$Id: rawhtml,v 1.22 2005/12/26 23:52:18 ghealton Exp $ (perl)';
+
+#
+#   DEFINITIONS COMMON TO CLIENT AND SERVER FUNCTIONS
+#
+use strict;
+use Socket;
+use FileHandle;
+use MIME::Base64;
+
+my(@Escapes);
+
+$rawhtml::EOL = "\015\012";	#standard Internet end-of-line code
+
+my @ModeList = qw( http https ftp );	#modes we (try) to support
+			# note: https converted to http for now
+#
+#
+#
+my %OfficialErrors =
+  (
+    0, " OK",
+    201, "Created",
+    202, "Accepted",
+    203, "Non-Authorative Information",
+    204, "No Content",
+    205, "Reset Content",
+    206, "Partial Content",
+
+    #Client Request Redirected
+    300, "Multiple Choices",
+    301, "Moved Permanently",
+    302, "Moved Temporarily",
+    303, "See Other",
+    304, "Not Modified",
+    305, "Use Proxy",
+
+    #Client Request Errors
+    400, "Bad Request",
+    401, "Authorization Required",
+    402, "Payment Required (not used yet)",
+    403, "Forbidden",
+    404, "Not Found",
+    405, "Method Not Allowed",
+    406, "Not Acceptable (encoding)",
+    407, "Proxy Authentication Required	",
+    408, "Request Timed Out",
+    409, "Conflicting Request",
+    410, "Gone",
+    411, "Content Length Required",
+    412, "Precondition Failed",
+    413, "Request Entity Too Long",
+    414, "Request URI Too Long",
+    415, "Unsupported Media Type",
+
+    ## Server Errors
+    500, "Internal Server Error",
+    501, "Not Implemented",
+    502, "Bad Gateway	",
+    503, "Service Unavailable	",
+    504, "Gateway Timeout	",
+    505, "HTTP Version Not Supported",
+  );
+
+#
+#   DETERMINE IF CLIENT OR SERVER
+#
+my $debugSw = undef;
+if ( $0 =~ m|\brawhtml$| )
+{   #normal processing from command line (vs require file)
+
+    ### use Getopt::Long;   CAN NOT USE DUE TO OPTIONAL ARGUMENTS IN GetHtml
+
+    if ( $ARGV[0] eq "--debug" )
+    {
+	$debugSw = shift;
+    }
+
+    if ( $ARGV[0] eq "--listen" )
+		{ shift @ARGV, &BecomeServer( @ARGV ); exit 0; };
+
+    if ( $ARGV[0] eq "--escapes" )
+	    	{ &Escapes; exit 0; };
+
+   $_ = &GetHtml( \*STDOUT, @ARGV );
+
+   exit $_;		#exit program with appropriate status
+
+}
+
+
+
+#
+#   sendCmd -- send command WITHOUT waiting for reply
+#	common to http and ftp transfers
+#
+sub sendCmd
+{
+    my( $Output, $cmd, $moreArgs ) = @_;
+    $cmd =~ s/\n/$rawhtml::EOL/g;
+
+    my ( $Error, $ErrorText );
+
+    $cmd .= $moreArgs if defined $moreArgs;
+
+    my($sent,$l,$Errs,$n) = ( 0, length( $cmd ), 0 );
+
+    $_ = $cmd;		#copy to temporary to edit for printing
+    $_ = "$cmd ????";	#suppose next test does not find \n
+    $_ = $1 if $cmd =~ /^([^\r\n]+\n?)/s;
+    s/\n/\\n\n/sg;
+    print $Output $_, "\n" if defined $Output;
+
+    while ( $sent < $l )
+    {   #send GET command to web server. allow for worst case difficulty!
+	$! = undef;	#ensure error code is cleared
+	$n = syswrite( SOCK, $cmd, $l - $sent, $sent );
+		# write command immediately, without any buffering.
+		# note: mixing syswrite() with <> reads is ok, but
+		# ##mixing syswrite() with print() would be bad!
+	if ( $n > 0 )
+	{   #bytes have been sent (but may be incomplete!)
+	    $sent += $n;
+	    print $Output "  sent $n bytes\n" if defined $Output;
+	}
+	else
+	{   #did not send any bytes
+	    my($err) = $!;		#save $!
+	    print STDERR "SYSWRITE ", (defined($n) &&  $err eq '' ) 
+		? "SOCK EOF\n"
+		: "SOCK ERROR: $!\n" ;
+	    if ( defined($n) ||  $err ne '' )
+	    {    #immediately abend on "EOF"
+		$Error = 1;
+		$ErrorText = "no bytes";
+		goto Return;
+	    }
+	    if ( ++$Errs > ( 5 * $l ) )
+	    {
+		$Error = 2;
+		$ErrorText = "too many errors";
+		goto Return;
+	    }
+	    sleep 1;			#give operator reaction time
+	}
+    }
+
+Return:
+    return( $Error, $ErrorText );
+
+}
+
+#
+#   send command and wait for FTP style reply
+#
+sub sendFtp
+{
+    my $port = shift @_;
+    my $Output = shift @_;
+
+    my @return = &sendCmd( $Output, @_ )		#send command
+	    if defined $_[0];
+
+    local $_;		#reply
+    my $multi;		#define to code that ends multi-line replys. undef=1 line
+
+    my $doneSw = undef;	#TRUE if all response lines read
+    $_ = "";		#initialze variable to read into
+    while( ! defined $doneSw )
+    {
+	my($x);
+	local($rawhtml::SIG{"ALRM"}) = 
+		    sub { warn "timeout on port $port\n" };
+	alarm(20);			#ensure we never hang forever on client
+	my( $r ) = sysread( Client, $x, 1 );	#read single character
+	alarm(0);
+	last if $r == 0;		#EOF or error: stop reading
+	next if $x eq "\r";		#discard \r of \r\n
+
+ 	if ( $x eq "\n" )
+	{   #end of line encountered
+	    if ( defined $multi )
+	    {   #in middle of multi-line reply
+		$doneSw = 1 if /^$multi /;	#set our internal END flag
+	    }
+	    else
+	    {   #end of first line: check if starting multi-line reply
+		if ( /^(\d\d\d)-/ )
+		{   #multi-line reply fortcoming: set up to trap it
+		    $multi = $1;
+		}
+		else
+		{   #normal line ending
+		    $doneSw = 1;
+		}
+	    }
+	}
+
+	$_ .= $x;			#remember character
+    }
+
+    my $err;
+    $err = $1 if /^(\d\d\d)/;
+    if ( $return[0] eq ''  and  $err !~ /^[123]\d\d/ )
+    {   #did not find "success" code in reply: return (likely) error
+	@return = ( $err + 2000, $return[1] );
+    }
+ 
+    return( $_, @return );
+}
+
+
+sub GetHtml
+{
+    my($Output,@Argv) = @_;				#set local @ARGV
+    my($Return,$Error,$ErrorText);
+    my($GET) = "GET";
+    my($HTTP) = "HTTP/1.0";		#http lever
+    my $raw_url = 0;			#true to keep raw URLs
+    my $verbose = 0;			#--verbose 
+    my $cookie_path = "";		#path to cookie file: empty if none
+    my @cookies;			#all cookies to send to output
+    my($GetReferrer);
+    my($BaseUrl);			#base for relative URL's ("" if none)
+    my $movedSw = 0;			#moved is OK
+
+    my $Agent = join( " ", ( split( /\s+/, $rawhtml::Rev ) ) [ 1, 2 ] );
+    $Agent =~ s/,v / /;
+
+    my($HttpRev, $Code, $Text);
+
+    while( $Argv[0] =~ /^--/ )
+    {
+	my($Argv0) = shift @Argv;
+
+	if ( $Argv0 eq "--post" )
+	{
+	   $GET = "POST";  
+	}
+	elsif ( $Argv0 eq "--head" )
+	{
+	   $GET = "HEAD";  
+	}
+	elsif ( $Argv0 eq "--http" )
+	{
+	   $HTTP = shift @Argv; 
+	   warn "invalid --http $HTTP\n" unless $HTTP =~ m"^HTTP/\d+\.\d+$";
+	}
+	elsif( $Argv0 eq "--agent" )
+	{
+	    $Agent = shift @Argv;
+	}
+	elsif( $Argv0 eq "--base" )
+	{
+	    $BaseUrl = shift @Argv; 
+	}
+	elsif( $Argv0 eq "--moved" )
+	{
+	    $movedSw = shift @Argv;
+	}
+	elsif( $Argv0 eq "--rawurl" )
+	{
+	    $raw_url = 1;
+	}
+	elsif( $Argv0 eq "--referrer" )
+	{
+	    $GetReferrer = shift @Argv; 
+	    $GetReferrer =~ s/\s*$/$rawhtml::EOL/;	#ensure \n code present
+	}
+	elsif( $Argv0 eq "--verbose" )
+	{
+	    $verbose = 1;
+	}
+	elsif( $Argv0 eq "--cookie" )
+	{
+	    $cookie_path = shift @Argv; 
+	    if ( defined($cookie_path) && $cookie_path =~ /./ )
+	    {
+		my $cookie_handle = new FileHandle( $cookie_path, "r" ) ||
+		       die "CAN NOT OPEN COOKIE INPUT FILE: $cookie_path: $!\n";
+		while ( ( my $cookie = $cookie_handle->getline ) )
+		{
+		    $cookie =~ s/^\s+//;
+		    $cookie =~ s/\s+$//;
+		    next if $cookie =~ /^#/;	#ignore comments
+		    push( @cookies, $cookie ) if length $cookie;
+		}
+
+		$cookie_handle->close;
+	    }
+	}
+    }
+
+    my ($remote,$port, $iaddr, $paddr, $proto, $line);
+
+    $remote  = shift @Argv || 'http://localhost/';
+
+    unless ( $remote =~ /^\w+:/  ||  $remote =~ m|//| )
+    {   #aparently a relative URL
+	if ( $BaseUrl )
+	{   #force absolute URL
+	    $remote = "$BaseUrl/$remote";
+	}
+
+    }
+
+    my($Args) = undef;
+    while( $Argv[0] =~ /^(\S+?)=(.*)/ )
+    {   #pick of CGI-BIN fields to append to GET request as if filled in
+	my($name,$arg) = ($1,$2);
+	shift @Argv;
+
+	foreach $_ ( \$name, \$arg )
+	{
+	    $$_ =~ s`([^-\w. /:])`  sprintf( '%%%02x', ord($1) ) `eg;
+	    $$_ =~ s/ /+/g;
+	}
+
+	unless ( defined $Args )
+	{   #first argument is lead by a '?'
+	    $Args .= '?';
+	}
+	else
+	{   #multiple arguments delimited by &
+	    $Args .= '&';
+	}
+
+	$Args .= "$name=$arg";
+    }
+
+    my($page) = "/";
+
+    $GET = $1 if $remote =~ s/^:([A-Z]+)://;	#allow custom $GET for testing
+
+    my $mode = 'http';			#default to http operations
+
+    my $modelist = join( "|", @ModeList );
+    $mode = lc($1) if			#wipe out & save any leading mode on URL
+	$remote =~ s"^($modelist):"";
+
+    #TRANSLATE https REQUESTS INTO http FOR NOW AS MY ISP DOES NOT SUPPORT
+    ##REQUIRED RSA LIBRARY. See
+	## http://search.cpan.org/search?dist=Crypt-OpenSSL-RSA
+    if ( $mode eq 'https' )
+    {
+$_ = <<'EOF';
+	local($@);
+	eval 'use Crypt::OpenSSL::RSA';
+	if ( $@ )
+	{   #library is not available.
+EOF
+	    $mode = 'http';		
+$_ = <<'EOF';
+	}
+EOF
+    }
+
+    if ( $remote =~ m"^(\w+):" )
+    {
+       $ErrorText = "INVALID PROTOCOL (only " .
+		join( ",", sort @ModeList ) . " supported): $1\n";
+       wantarray  ||  die $ErrorText;
+       $Error = 9;
+       goto Return;
+    }
+
+    if ( $remote =~ s"^/*([^/]+)/?"/" )
+    {   #contains web address 
+	( $remote, $page ) = ( $1, $remote );
+    }
+
+    $port = 80;			#set default send port
+  {
+    my $sh = new FileHandle;
+    if ( $sh->open( "/etc/services", "r" ) )
+    {   #found /etc/services: look up actual port
+	while( <$sh> )
+	{
+	    next unless m"^$mode\s+(\d+)/tcp";
+	    $port = $1;
+	    last;
+	}
+	$sh->close;
+    }
+  }
+
+    my $TargetHost = $remote;
+
+    $port = $1 if $remote =~ s/:(\d+)$//;  #pick out port number in normal URL
+    unless ( $port )
+    {
+       $ErrorText = "No port";
+       wantarray  ||  die $ErrorText;
+       $Error = 9;
+       goto Return;
+    }
+
+    my($ClientHost) = $remote;
+
+    unless ( $iaddr = inet_aton($remote) )
+    {
+       $ErrorText = "no host: $remote";
+       wantarray  ||  die $ErrorText;
+       $Error = 9;
+       goto Return;
+    }
+
+    $paddr   = sockaddr_in($port, $iaddr);
+
+    print $Output "connecting to $remote on $port\n" 
+		if defined $Output;
+    $proto   = getprotobyname('tcp');
+    unless ( socket(SOCK, PF_INET, SOCK_STREAM, $proto) )
+    {
+       $ErrorText = "socket: $!";
+       wantarray  ||  die $ErrorText;
+       $Error = 9;
+       goto Return;
+    }
+    unless ( connect(SOCK, $paddr) )
+    {
+       $ErrorText = "connect: $!";
+       wantarray  ||  die  $ErrorText;
+       $Error = 9;
+       goto Return;
+    }
+
+    if ( $mode eq 'ftp' )
+    {   #### PROCESS FTP REQUESTS ####		RFC 959
+	my $cmd;
+
+	{   #login to FTP server
+	    $cmd = "USER ftp\n";
+	    my $Reply;
+	    my @sendFtp = ( $port, $Output );	#common arguments to &sendFtp
+
+	    # read initial connection reply from server
+	    ( $Reply, $Error, $ErrorText ) = sendFtp( @sendFtp, undef, undef );
+		goto Return if $Error;
+
+	    ( $Reply, $Error, $ErrorText ) =
+		sendFtp( @sendFtp, $cmd, undef );
+	    goto Return if $Error;
+
+	    if ( $Reply =~ /^331/ )
+	    {   #get password, if needed
+		$cmd = "PASS $ENV{'LOGNAME'}\n";
+		( $Reply, $Error, $ErrorText ) =
+		    sendFtp( @sendFtp, $cmd, undef );
+		goto Return if $Error;
+	    }
+
+	    $cmd = "SYST\n";		#system type (optional)
+	    my $System;			#system type (for our debugging reference)
+	    ( $System, $Error, $ErrorText ) =
+		sendFtp( @sendFtp, $cmd, undef );
+	    ### goto Return if $Error;	#ignore error as command is "optional"
+
+	    my $cd;			#directory to CD to
+	    $cd = $1 if $page =~ s".*/"";	#isolate directory name
+
+	    if ( $cd ne "" )
+	    {
+	   	$cmd = "CWD $cd\n";
+	       ( $Reply, $Error, $ErrorText ) =
+		    sendFtp( @sendFtp, $cmd, undef );
+		goto Return if $Error;
+	    }
+	     
+	    $cmd = "RETR $page\n";		#return file
+		# NOTE: we do not open the data port: nor even properly
+		# ##tell the server about it. This results in an immediate
+		# ##"Transient Negative Completion" reply, if the file
+		# ##actually exist (error 4xy). Else we get a Permanent 
+		# ##Negative Completion reply (5xy) if the file is not found.
+		# #Remeber, all we want to know is if the file can be 
+		# ##successfully opened or not. We don't need, or even
+		# ##want, the data. (if we decide we do want the data,
+		# ##open port $port-1 to get it)
+
+	    ( $Reply, $Error, $ErrorText ) =
+		sendFtp( @sendFtp, $cmd, undef );
+	    ( $Error, $ErrorText ) = ()		#expected error if file exists?
+		  if $Error =~ /4\d\d$/;	## (allow for 2000 "FTP" code)
+	    goto Return if $Error;
+
+	    $cmd = "QUIT\n";		#logout
+	    ( $Reply, $Error, $ErrorText ) =
+		sendFtp( @sendFtp, $cmd, undef );
+	    goto Return if $Error;
+
+
+	}
+    }
+    else
+    {   #### PROCESS HTTP AND HTTPS REQUESTS #####
+
+	#send GET request to get system's home page
+	{
+	    ## first ensure any special characters are escaped or changed
+	    my $page0 = $page;		#save original page address
+	    unless ( $raw_url )
+	    {   #normally we always come through here
+		$page =~ s`([^-/.=?@# \w])` sprintf( '%%%02x', ord( $1 ) )`eg;
+		$page =~ s/ /+/sg;
+	    }
+
+	    ## build any cookies
+	    my $cookies_out = "";
+	    if ( @cookies )
+	    {   #assure we only send the best cookies to the server
+		# http://wp.netscape.com/newsref/std/cookie_spec.html
+		foreach my $cookie ( @cookies )
+		{
+		    my @cookie_fields = split( /\s*;\s*/, $cookie );
+
+		    # extract fields into hash, with a few reserved keys
+		    my %cookie_fields;			#saved cookie fields
+		      my $cf_cookie = ";cookie;";	  #internal cookie key
+		      my $cf_secure = ";secure;";	  #internal secure key
+		    foreach my $field ( @cookie_fields )
+		    {
+			if ( %cookie_fields &&
+				$field =~ /^\s*([^;=]+)=([^;=]+)\s*$/ )
+			{   # this is a real field, after the first field
+			    $cookie_fields{$1} = $2;
+			}
+			elsif ( $field =~ /=/ )
+			{   #name=value field: only valid on first
+			    if ( %cookie_fields )
+			    {   #oops: not first field
+				warn "PROBLEM COOKIE IGNORED: $cookie\n";
+			    }
+			    else
+			    {   #first field is THE cookie name and value
+				$cookie_fields{$cf_cookie} = $field;
+			    }
+			}
+			else
+			{   #flag field
+			    $cookie_fields{$cf_secure} = $field;
+			}
+		    }
+
+		    # determine if fields we compare against are present
+		    my $c_domain_qm =
+			( exists($cookie_fields{'domain'}) &&
+				 $cookie_fields{'domain'} =~ /\S/ )
+			  ? quotemeta( $cookie_fields{'domain'} ) 
+			  : undef;
+
+		    my $c_path_qm =
+			( exists($cookie_fields{'path'}) &&
+				 $cookie_fields{'path'} =~ /\S/ ) 
+			  ? quotemeta( $cookie_fields{'path'} ) 
+			  : undef;
+
+		    #compare the domain, if any
+		    if ( defined($c_domain_qm) )
+		    {   #domain exists: do tail matching
+			next unless $TargetHost =~ /$c_domain_qm$/;
+		    }
+
+		    #compare the path, if any
+		    if ( defined( $c_path_qm ) )
+		    {
+			next unless $page0 =~ /^$c_path_qm/;
+		    }
+
+		    #provide the cookie
+		    $cookies_out .= length($cookies_out)
+					? "; "
+					: "Cookie: ";
+		    $cookies_out .= $cookie_fields{$cf_cookie};
+		}
+	    }
+
+	    ## build get command
+	    my($Special) = $GetReferrer;	#start with optional referrer
+	    $Special .= "Content-Length: " . length( $Args ) . "\n" 
+		if $GET eq 'POST';
+	    $GET .= $Args if $GET eq 'GET';	#arguments fields from GET
+	    my($GetCmd) = <<EOF;
+$GET $page $HTTP
+Host: $TargetHost
+Accept: text/html, text/plain, text/sgml, */*;q=0.01
+Accept-Encoding: gzip, compress
+Accept-Language: en
+${Special}${cookies_out}User-Agent: $Agent
+
+EOF
+
+	    ##$GetCmd =~ s/\r?\n/\r\n/sg;	#expand line endings to \r\n
+	    print $GetCmd if $verbose;
+	    ( $Error, $ErrorText ) =
+		sendCmd( $Output, $GetCmd, $GET eq 'POST' ? $Args : undef );
+	    goto Return if $Error;
+	}
+
+	print $Output "--- BEGIN REPLY ---\n" if defined $Output;
+
+	my $cookie_save_handle = undef;
+	my $cookie_save_path;
+	if ( defined($cookie_path) && 
+	    $cookie_path =~ m"^(.*\.)(\d+)$" )
+	{   # numeric "." suffix indicates saving any incoming cookies
+	    $cookie_save_path = $1 . ( $2 + 1 );
+	    $cookie_save_handle = new FileHandle( $cookie_save_path, "w" ) ||
+		die "CAN NOT OPEN COOKIE SAVE FILE: $cookie_save_path: $!\n";
+	}
+
+	#read the response from the web server
+	    local($_);
+	    $line =~ s`([\0-\37\177-\377])`
+		$_ = $Escapes[ord($1)];
+		defined($_) ? $_ : $1;
+		  `eg;
+	while (defined($line = <SOCK>)) {
+	    $Return .= $line;
+	    print $Output $line if defined $Output;
+	    if ( $cookie_save_handle && 
+		$line =~ /^set-cookie\s*:\s*(\S.*\S)\s*$/is )
+	    {   #save cookie
+		$cookie_save_handle->print( $1, "\n" );
+	    }
+	}
+
+	unless ( close (SOCK) )
+	{
+	   $ErrorText = "close: $!";
+	   wantarray  ||  die $ErrorText;
+	   $Error = 9;
+	   goto Return;
+	}
+
+	if ( $cookie_save_handle )
+	{
+	    $cookie_save_handle->close ||
+		warn "CAN NOT CLOSE SAVED COOKIE FILE: $cookie_save_path: $!\n";
+	}
+
+	### check if valid response
+	$Return =~ s/\r\n/\n/g;		#microsoft line endings to perl
+	$Return =~ s/\r/\n/g;		#Apple line endings to perl
+
+	($HttpRev, $Code, $Text) = ( $1, $2, $3 )  #get the poop on the file
+		    if $Return =~ /^(HTTP\S+)\s+(\S+)\s*(.*)/s;
+	$Error = 999 unless $Code =~ /^\d\d\d+$/;	#ensure Code is numeric
+
+	unless ( $Code == 200  ||  $Code == 302  || 
+						( $movedSw && $Code == 301 ) )
+	{   #NOT a valid reply
+	    $Error = int($Code / 10)  + ($Code % 10);	#anything but 
+	    $Error = 6 if $Error <= 0;		#ensure remains non-zero
+	}
+	#  ("302 Moved Temporarily" is good enough for our purposes)
+	#  ("301 Moved Permanently" is good enough if --moved given)
+
+	$Error = 404 if $Error == 0  &&  $Return =~ m"</title>\s*$"si;  #alt 404
+	$Error = 404 if $Error == 0  &&  $Return eq "";	#empty is not found
+
+	print $Output "---END REPLY---\n" if defined $Output;
+    }
+
+Return:
+    if ( wantarray )
+    {
+	return ( $Error, $ErrorText, $Return, $HttpRev, $Code );
+    }
+
+    return $Error;
+}
+
+
+#######################################################################
+
+sub BecomeServer
+{
+    my(@Argv) = @_;
+
+    BEGIN { $ENV{PATH} = '/usr/ucb:/bin' }
+    		#ensure PATH is untainted and "safe"
+
+    use Socket;
+    use Carp;
+
+				##(typically \r\n, but systems may vary)
+
+    use POSIX qw( strftime );	#allow use of posix strftime
+
+    sub logmsg { print "$0 $$: @_ at ", scalar localtime, "\n" }
+
+    my $port =			#8080 is a non-restricted port on most systems
+		shift @Argv || 8080;
+    $port = ( $port =~ /(\d+)/ ) ? $1 : 8080; 	# untaint port number
+
+
+    my $lowError = 300;
+    my $errorForce = shift @Argv;	#error code to force on reply
+    print "will force forcing error $errorForce\n" if $errorForce > 0;
+
+    my $proto = getprotobyname('tcp');
+
+    socket(Server, PF_INET, SOCK_STREAM, $proto)        || die "socket: $!";
+    setsockopt(Server, SOL_SOCKET, SO_REUSEADDR,
+                                        pack("l", 1))   || die "setsockopt: $!";
+    bind(Server, sockaddr_in($port, INADDR_ANY))        || die "bind: $!";
+    listen(Server,SOMAXCONN)                            || die "listen: $!";
+
+    logmsg "server started on port $port";
+
+    my $paddr;
+
+    $SIG{CHLD} = \&REAPER;	#if we ever spaw children, ensure they die clean
+
+    my( $port2,$iaddr,$name );
+
+    for ( ; $paddr = accept(Client,Server); close Client) {
+        ($port2,$iaddr) = sockaddr_in($paddr);
+        $name = gethostbyaddr($iaddr,AF_INET);
+
+        logmsg "connection from $name [",
+                inet_ntoa($iaddr), "]
+                at port $port2";
+
+	$_ = "";		#initialze variable to read into
+	my($linectr) = 0;
+	while( $_ !~ /\n\n$/ )
+	{
+	    my($x);
+	    local($rawhtml::SIG{"ALRM"}) = 
+			sub { warn "timeout on port $port\n" };
+	    alarm(20);			#ensure we never hang forever on client
+	    my( $r ) = sysread( Client, $x, 1 );	#read single character
+	    alarm(0);
+	    last if $r == 0;		#EOF or error: stop reading
+	    next if $x eq "\r";		#discard \r of \r\n
+	    $_ .= $x;			#remember character
+	    if ( $x eq "\n" )		#end of line?
+	    {   #end of line condition
+		last if  ++$linectr == 1  
+			&&  $_ =~ /^\s*\w+\s+\S*\s*$/i;	#old 1-line protocol 
+	        #multi-line protocol ends with a blank line... keep looking
+	    }
+	}
+
+	### for debugging purposes, print incoming command to standard out
+	print STDOUT "\n", $_;
+	print STDOUT "\n" if $_ ne ''  &&  $_ !~ /\n$/;
+	#
+	#   GENERATE RESPONSE TEXT
+	#
+	my($Command) = ( /^(\s*\w+)/s ) ? $1 : "INVALID COMMAND";
+
+	my($Time) = time;
+	my(@GmTime) = gmtime $Time;
+	my($webtime) = strftime( '%a, %d %b %Y %T GMT', @GmTime );
+
+
+	s/\&/\&amp;/sg;		#change command into HTML for return
+	s/\</\&lt;/sg;
+	s/\>/\&gt;/sg;
+    ##	s/^/    |/mg;
+
+	if ( $Command =~ s/^\s+// )
+	{
+	    print STDERR "LEADING SPACES IN COMMAND\n";
+	}
+
+	my($CommonForm) = <<EOF;
+Fill out the following
+<BR>
+<H2>Get</H2>
+<FORM METHOD=GET ACTION="GetActionFromForm">
+<INPUT type=hidden name=G_hidden value="hidden field">
+<INPUT type=submit name=G_submit value="GET">
+<INPUT type=text   name=G_text   value="hello, world"  width=32>
+</FORM>
+<H2>Post</H2>
+<FORM METHOD=POST ACTION="PostActionFromForm">
+<INPUT type=hidden name=P_hidden value="hidden field">
+<INPUT type=submit name=P_submit value="POST">
+<INPUT type=text   name=P_text   value="hello, world"  width=32>
+</FORM>
+<H2>File Upload</H2>
+<FORM METHOD=POST ACTION="PostFileUpload" enctype="multipart/form-data">
+<input type="hidden" name="F_hidden" value="Hidden value">
+<input type="hidden" name="F_hidden-2" value="Another Hidden value">
+<INPUT type="file" name=F_uploaded_file value="WhateverFile" size="50" maxlength="80">
+<INPUT type=submit name=F_submit value="POST">
+</FORM>
+EOF
+	my($CommonReply) = <<EOF;
+<BLOCKQUOTE><TABLE BORDER=1>
+<TR><TD><PRE>\n$_</PRE></TD></TR>
+</TABLE></BLOCKQUOTE>
+EOF
+	my($CommonClose) = <<EOF;
+<P><HR><P>
+EOF
+
+	my($Content);
+	if ( $Command eq 'POST' )
+	{
+	    my($LocalTime) = scalar(localtime $Time);
+
+	    my($SpecialReply);
+
+	    if ( m/\nContent-Length:\s*(\d+)\s*\n/i )
+	    {   # found expected data group
+		my($n) = $1;		#size of data arrea
+
+		my($x, $r);
+	      {		#limit scope of enclosed locals
+		local($rawhtml::SIG{"ALRM"}) = 
+			sub { warn "POST timeout on port $port\n" };
+		alarm(20);		#ensure we never hang forever on client
+		$r = sysread( Client, $x, $n );	#read single character
+		alarm(0);
+	      }
+
+		print $x, "\n" if $debugSw;
+
+		my($y,$ry);
+	      if(0)
+	      {		#limit scope of enclosed locals
+		local($rawhtml::SIG{"ALRM"}) = sub { return };	#expected t/o
+		alarm(2);		#ensure we never hang forever on client
+		$ry = sysread( Client, $y, 100 );	#try to read in more
+		alarm(0);
+		print $y, "\n" if $debugSw;
+	      }
+
+		if ( $r != $n )
+		{   #oops: something wrong
+		    $Content .= 
+			"<STRONG>ERROR: expected $n bytes; read $r</STRONG>\n";
+		}
+
+		if ( $ry != 0 )
+		{
+		    $Content .= 
+			"<STRONG>ERROR: extra $ry bytes read</STRONG>\n";
+		}
+
+		$SpecialReply = <<EOF;
+<BLOCKQUOTE><TABLE BORDER=1>
+<TR><TD><PRE>$x<FONT COLOR=red>$y</FONT></PRE></TD></TR></TABLE></BLOCKQUOTE>
+<P><HR><P>
+</HTML>
+EOF
+	    }
+	    else
+	    {
+		$SpecialReply = <<EOF;
+<STRONG>DID NOT FIND EXPEcTED "Content-Length" FIELD</FONT><P>
+EOF
+	    }
+
+	    $Content = <<EOF;
+<HTML><TITLE>POST Test Response</TITLE>
+<H1>POST Test Response</H1>
+Hello there, $name, it's now $LocalTime
+<P>Your actual POST query follows:
+$CommonReply
+<P>Post data follows:
+$SpecialReply
+$CommonClose
+$CommonForm
+EOF
+
+	}
+	elsif ( $Command eq 'GET' )
+	{
+	    my($LocalTime) = scalar(localtime $Time);
+	    $Content = <<EOF;
+<HTML><TITLE>Test Response</TITLE>
+<H1>Test Response</H1>
+Hello there, $name, it's now $LocalTime
+$CommonReply
+$CommonClose
+$CommonForm
+</HTML>
+EOF
+	}
+	else
+	{   #not a supported command
+	    my($page) = $_;
+	    $page =~ s/^\w+\s+//;
+
+	    $Content = <<EOF;
+HTTP/1.1 501 Method Not Implemented
+Date: $webtime
+Server: $::Rev
+Allow: GET
+Connection: close
+Content-Type: text/html; charset=iso-8859-1
+
+<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML 2.0//EN">
+<HTML><HEAD>
+<TITLE>501 Method Not Implemented</TITLE>
+</HEAD><BODY>
+<H1>Method Not Implemented</H1>
+$Command to $page not supported.<P>
+Invalid method in request $Command $page HTTP/1.0<P>
+<HR>
+$::Rev
+<HR>
+$CommonReply
+<P><HR><P>
+</BODY></HTML>
+EOF
+	}
+	$Content =~ s/\n/$rawhtml::EOL/sg;
+	#
+	#   GENERATE RESPONSE HEADER
+	#
+	my ( $replyNum, $replyHeads ) = ( 200, <<EOF );
+Last-Modified: $webtime
+EOF
+
+	my $Content_Head = undef;
+	$replyNum = $errorForce if $errorForce > 0;
+	my $replyText = $OfficialErrors{$replyNum};
+	$replyText ||= "Unknown error $replyNum";
+
+	if ( $errorForce > 0 )
+	{
+	    if ( $errorForce == 401 )
+	    {   #Authorization error
+		unless ( /^Authorization\s*:\s*(\S+)\s+(\S+)/im 
+		  || /^Proxy-Authorization\s*:\s*(\S+)\s+(\S+)/im )
+		{   #no authorization.... force magic header to request passwd
+		    $replyHeads = <<EOF;
+WWW-Authenticate: Basic realm="rawhtml challenge"
+EOF
+		}
+		else
+		{   #authorization header present: decode details
+		    my $authtype = $1;
+		    my $encoded = $2;
+		    my $decoded = decode_base64( $encoded );
+		    my ( $user, $password ) = split( /:/, $decoded );
+		    print "   type=$authtype  user=$user   password=$password\n";
+		    $replyNum = 200;		#hey, it's really good!
+		}
+
+	    }
+	    else
+	    {   # don't know how to handle
+		$replyNum = $errorForce;
+		if ( $errorForce >= $lowError )
+		{   #would like to do something smarter... but for now...
+		    $replyText = "Forcing Error  $replyNum";
+		    $replyHeads = "";
+		}
+	    }
+
+	    if ( $replyNum >= $lowError )
+	    {
+		    print "forcing error reply\n";
+		    $Content = <<EOF;
+<HTML><HEAD>
+<TITLE>$replyNum $replyText</TITLE>
+</HEAD><BODY>
+<H1>$replyText</H1>
+The request was forced to fail for debugging purposes.<P>
+<HR>
+</BODY></HTML>
+EOF
+	    }
+	}
+
+	my($ContentLength) = length $Content;
+	$Content_Head ||= <<EOF;
+HTTP/1.1 $replyNum $replyText
+Date: $webtime
+Server: $::Rev
+Content-Length: $ContentLength
+${replyHeads}Connection: close
+Content-Type: text/html
+
+EOF
+	#
+	#   SEND HEADER AND RESPONSE
+	#
+	$Content_Head .= $Content;
+	$Content_Head =~ s/\n/$rawhtml::EOL/sg;
+
+        syswrite Client, $Content_Head, length $Content_Head;
+
+	close Client;
+	logmsg "connection from $name [",
+                inet_ntoa($iaddr), "]
+                closed\n\n";
+
+    }
+
+}
+
+#######################################################################
+
+sub Escapes
+{
+    my($i);
+    my(%EscapeInfo);
+
+    ##Aacute          &Aacute;    Capital A, acute accent
+    while( <DATA> )
+    {
+	last if /^===/;
+
+	next unless /^(\w\S+)\s+(\&\S+)\s+(\S.*)\s+/;
+	my($CommonName, $Escape, $Description) = ( $1, $2, $3 );
+
+	$Description =~ s/\s+$//;
+	$Description =~ s/\s\s+/ /g;
+
+	$EscapeInfo{$Description} = $Escape;
+    }
+
+# &amp;#00; - &#08;&amp;#08;       Unused 
+# &#09;&amp;#09;               Horizontal tab
+# &#65;&amp;#65; - &#90;&amp;#90;       Letters A-Z
+#&#193;&amp;#193;              Capital A, grave accent
+ 
+    @Escapes = ();		#reset @Escapes array to rebuild it
+    my(@Descriptions);
+    while( <DATA> )
+    {
+	next unless /^\&\#(\d+);\&amp;#\d+;\s+(\w\S+)\s+$/;
+	my($Numeric, $Description) = ( $1, $2 );
+
+	$Description =~ s/\s+$//;
+	$Description =~ s/\s\s+/ /g;
+
+	my($Escape) = $EscapeInfo{$Description};
+
+	next unless defined $Escape;
+
+	$Escapes[$Numeric] = $Escape;
+	$Descriptions[$Numeric] = $Description;
+
+	delete $EscapeInfo{$Description};	#clear this from hash table
+    }
+
+    my($w) = 25;
+
+    print "\@Escapes = (\n";
+    for ( $i = 0; $i < @Escapes; $i++ )
+    {
+	my($Escape) = $Escapes[$i];
+	my($Description) = $Descriptions[$i];
+
+	$Escape = defined($Escape) ? "'$Escape'" : "undef";
+	$Description = "<no escape>" unless defined $Description;
+
+	printf( "\t\%-${w}s,\t#%4d 0%03o 0x%02x  %s\n", 
+			$Escape, $i, $i, $i, $Description );
+    }
+
+    foreach $_ ( sort keys %EscapeInfo )
+    {   #unnused keys
+	printf( "##\t%-${w}s,\t# UNKNOWN NUMERIC\n", $_ );	
+    }
+
+    print "\t);\n";
+
+    exit 0;				#failsafe exit
+}
+
+1;
+
+#end: rawhtml
+
+__END__
+
+
+# ideas
+#    # keep httpd connection open until all data written?
+#    # lwp-request - Appachie associated program to read web pages?
+
+
+space		&nbsp;		Non-break space
+leftparen	&lpren; 	Left parenthesis
+rightparen	&rpren; 	Right parenthesis
+ampersand	&amp; 		Ampersand
+
+
+Aacute          &Aacute;    Capital A, acute accent
+Agrave          &Agrave;    Capital A, grave accent
+Acirc           &Acirc;     Capital A, circumflex accent
+Atilde          &Atilde;    Capital A, tilde
+Aring           &Aring;     Capital A, ring
+Auml            &Auml;      Capital A, dieresis or umlaut mark
+AElig           &AElig;     Capital AE dipthong (ligature)
+Ccedil          &Ccedil;    Capital C, cedilla
+Eacute          &Eacute;    Capital E, acute accent
+Egrave          &Egrave;    Capital E, grave accent
+Ecirc           &Ecirc;     Capital E, circumflex accent
+Euml            &Euml;      Capital E, dieresis or umlaut mark
+Iacute          &Iacute;    Capital I, acute accent
+Igrave          &Igrave;    Capital I, grave accent
+Icirc           &Icirc;     Capital I, circumflex accent
+Iuml            &Iuml;      Capital I, dieresis or umlaut mark
+ETH             &ETH;       Capital Eth, Icelandic
+Ntilde          &Ntilde;    Capital N, tilde
+Oacute          &Oacute;    Capital O, acute accent
+Ograve          &Ograve;    Capital O, grave accent
+Ocirc           &Ocirc;     Capital O, circumflex accent
+Otilde          &Otilde;    Capital O, tilde
+Ouml            &Ouml;      Capital O, dieresis or umlaut mark
+Oslash          &Oslash;    Capital O, slash
+Uacute          &Uacute;    Capital U, acute accent
+Ugrave          &Ugrave;    Capital U, grave accent
+Ucirc           &Ucirc;     Capital U, circumflex accent
+Uuml            &Uuml;      Capital U, dieresis or umlaut mark
+Yacute          &Yacute;    Capital Y, acute accent
+
+THORN           &THORN;     Capital THORN, Icelandic
+szlig           &szlig;&amp;szlig;     Small sharp s, German (sz ligature)
+
+aacute          &aacute;&amp;aacute;    Small a, acute accent
+agrave          &agrave;&amp;agrave;    Small a, grave accent
+acirc           &acirc;&amp;acirc;     Small a, circumflex accent
+atilde          &atilde;&amp;atilde;    Small a, tilde
+auml            &auml;&amp;auml;      Small a, dieresis or umlaut mark
+aelig           &aelig;&amp;aelig;     Small ae dipthong (ligature)
+ccedil          &ccedil;&amp;ccedil;    Small c, cedilla
+eacute          &eacute;&amp;eacute;    Small e, acute accent
+egrave          &egrave;&amp;egrave;    Small e, grave accent
+ecirc           &ecirc;&amp;ecirc;     Small e, circumflex accent
+euml            &euml;&amp;euml;      Small e, dieresis or umlaut mark
+iacute          &iacute;&amp;iacute;    Small i, acute accent
+igrave          &igrave;&amp;igrave;    Small i, grave accent
+icirc           &icirc;&amp;icirc;     Small i, circumflex accent
+iuml            &iuml;&amp;iuml;      Small i, dieresis or umlaut mark
+eth             &eth;&amp;eth;       Small eth, Icelandic
+ntilde          &ntilde;&amp;ntilde;    Small n, tilde
+oacute          &oacute;&amp;oacute;    Small o, acute accent
+ograve          &ograve;&amp;ograve;    Small o, grave accent
+ocirc           &ocirc;&amp;ocirc;     Small o, circumflex accent
+otilde          &otilde;&amp;otilde;    Small o, tilde
+ouml            &ouml;&amp;ouml;      Small o, dieresis or umlaut mark
+oslash          &oslash;&amp;oslash;    Small o, slash
+uacute          &uacute;&amp;uacute;    Small u, acute accent
+ugrave          &ugrave;&amp;ugrave;    Small u, grave accent
+ucirc           &ucirc;&amp;ucirc;     Small u, circumflex accent
+uuml            &uuml;&amp;uuml;      Small u, dieresis or umlaut mark
+yacute          &yacute;&amp;yacute;    Small y, acute accent
+thorn           &thorn;&amp;thorn;     Small thorn, Icelandic
+yuml            &yuml;&amp;yuml;      Small y, dieresis or umlaut mark
+
+===== BREAK
+
+This list, sorted numerically, is derived from ISO 8859/1 8-bit single-byte coded graphic character set:<P>
+
+&#38;&amp;#38;               Ampersand
+
+&amp;#00; - &#08;&amp;#08;       Unused 
+&#09;&amp;#09;               Horizontal tab
+&#10;&amp;#10;               Line feed
+&amp;#11; - &#31;&amp;#31;       Unused
+
+&#32;&amp;#32;               Space
+&#33;&amp;#33;               Exclamation mark
+&#34;&amp;#34;               Quotation mark
+&#35;&amp;#35;               Number sign
+&#36;&amp;#36;               Dollar sign
+&#37;&amp;#37;               Percent sign
+&#38;&amp;#38;               Ampersand
+&#39;&amp;#39;               Apostrophe
+&#40;&amp;#40;               Left parenthesis
+&#41;&amp;#41;               Right parenthesis
+&#42;&amp;#42;               Asterisk
+&#43;&amp;#43;               Plus sign
+&#44;&amp;#44;               Comma
+&#45;&amp;#45;               Hyphen
+&#46;&amp;#46;               Period (fullstop)
+&#47;&amp;#47;               Solidus (slash)
+
+&#48;&amp;#48; - &#57;&amp;#57;       Digits 0-9
+
+&#58;&amp;#58;               Colon
+&#59;&amp;#59;               Semi-colon
+&#60;&amp;#60;               Less than
+&#61;&amp;#61;               Equals aign
+&#62;&amp;#62;               Greater than
+&#63;&amp;#63;               Question mark
+&#64;&amp;#64;               Commercial at
+     
+&#65;&amp;#65; - &#90;&amp;#90;       Letters A-Z
+
+&#91;&amp;#91;               Left square bracket
+&#92;&amp;#92;               Reverse solidus (backslash)
+&#93;&amp;#93;               Right square bracket
+&#95;&amp;#95;               Horizontal bar
+&#96;&amp;#96;               Acute accent
+
+&#97;&amp;#97; - &#122;&amp;#122;      Letters a-z
+
+&#123;&amp;#123;              Left curly brace
+&#124;&amp;#124;              Vertical bar
+&#125;&amp;#125;              Right curly brace
+&#126;&amp;#126;              Tilde
+
+&amp;#127; - &amp;#160;     Unused
+
+&#161;&amp;#161;              Inverted exclamation
+&#162;&amp;#162;              Cent sign
+&#163;&amp;#163;              Pound sterling
+&#164;&amp;#164;              General currency sign
+&#165;&amp;#165;              Yen sign
+&#166;&amp;#166;              Broken vertical bar
+&#167;&amp;#167;              Section sign
+&#168;&amp;#168;              Umlaut (dieresis)
+&#169;&amp;#169;              Copyright
+&#170;&amp;#170;              Feminine ordinal
+&#171;&amp;#171;              Left angle quote, guillemotleft
+&#172;&amp;#172;              Not sign
+&#173;&amp;#173;              Soft hyphen
+&#174;&amp;#174;              Registered trademark
+&#175;&amp;#175;              Macron accent
+&#176;&amp;#176;              Degree sign
+&#177;&amp;#177;              Plus or minus
+&#178;&amp;#178;              Superscript two
+&#179;&amp;#179;              Superscript three
+&#180;&amp;#180;              Acute accent
+&#181;&amp;#181;              Micro sign
+&#182;&amp;#182;              Paragraph sign
+&#183;&amp;#183;              Middle dot
+&#184;&amp;#184;              Cedilla
+&#185;&amp;#185;              Superscript one
+&#186;&amp;#186;              Masculine ordinal
+&#187;&amp;#187;              Right angle quote, guillemotright
+&#188;&amp;#188;              Fraction one-fourth
+&#189;&amp;#189;              Fraction one-half
+&#190;&amp;#190;              Fraction three-fourths
+&#191;&amp;#191;              Inverted question mark
+
+&#192;&amp;#192;              Capital A, acute accent
+&#193;&amp;#193;              Capital A, grave accent
+&#194;&amp;#194;              Capital A, circumflex accent
+&#195;&amp;#195;              Capital A, tilde
+&#196;&amp;#196;              Capital A, ring
+&#197;&amp;#197;              Capital A, dieresis or umlaut mark
+&#198;&amp;#198;              Capital AE dipthong (ligature)
+&#199;&amp;#199;              Capital C, cedilla
+&#200;&amp;#200;              Capital E, acute accent
+&#201;&amp;#201;              Capital E, grave accent
+&#202;&amp;#202;              Capital E, circumflex accent
+&#203;&amp;#203;              Capital E, dieresis or umlaut mark
+&#204;&amp;#204;              Capital I, acute accent
+&#205;&amp;#205;              Capital I, grave accent
+&#206;&amp;#206;              Capital I, circumflex accent
+&#207;&amp;#207;              Capital I, dieresis or umlaut mark
+&#208;&amp;#208;              Capital Eth, Icelandic
+&#209;&amp;#209;              Capital N, tilde
+&#210;&amp;#210;              Capital O, acute accent
+&#211;&amp;#211;              Capital O, grave accent
+&#212;&amp;#212;              Capital O, circumflex accent
+&#213;&amp;#213;              Capital O, tilde
+&#214;&amp;#214;              Capital O, dieresis or umlaut mark
+
+&#215;&amp;#215;              Multiply sign
+
+&#216;&amp;#216;              Capital O, slash
+&#217;&amp;#217;              Capital U, acute accent
+&#218;&amp;#218;              Capital U, grave accent
+&#219;&amp;#219;              Capital U, circumflex accent
+&#220;&amp;#220;              Capital U, dieresis or umlaut mark
+&#221;&amp;#221;              Capital Y, acute accent
+
+&#222;&amp;#222;              Capital THORN, Icelandic
+&#223;&amp;#223;              Small sharp s, German (sz ligature)
+
+&#224;&amp;#224;              Small a, acute accent
+&#225;&amp;#225;              Small a, grave accent
+&#226;&amp;#226;              Small a, circumflex accent
+&#227;&amp;#227;              Small a, tilde
+&#228;&amp;#228;              Small a, tilde
+&#229;&amp;#229;              Small a, dieresis or umlaut mark
+&#230;&amp;#230;              Small ae dipthong (ligature)
+&#231;&amp;#231;              Small c, cedilla
+&#232;&amp;#232;              Small e, acute accent
+&#233;&amp;#233;              Small e, grave accent
+&#234;&amp;#234;              Small e, circumflex accent
+&#235;&amp;#235;              Small e, dieresis or umlaut mark
+&#236;&amp;#236;              Small i, acute accent
+&#237;&amp;#237;              Small i, grave accent
+&#238;&amp;#238;              Small i, circumflex accent
+&#239;&amp;#239;              Small i, dieresis or umlaut mark
+&#240;&amp;#240;              Small eth, Icelandic
+&#241;&amp;#241;              Small n, tilde
+&#242;&amp;#242;              Small o, acute accent
+&#243;&amp;#243;              Small o, grave accent
+&#244;&amp;#244;              Small o, circumflex accent
+&#245;&amp;#245;              Small o, tilde
+&#246;&amp;#246;              Small o, dieresis or umlaut mark
+
+&#247;&amp;#247;              Division sign
+
+&#248;&amp;#248;              Small o, slash
+&#249;&amp;#249;              Small u, acute accent
+&#250;&amp;#250;              Small u, grave accent
+&#251;&amp;#251;              Small u, circumflex accent
+&#252;&amp;#252;              Small u, dieresis or umlaut mark
+&#253;&amp;#253;              Small y, acute accent
+&#254;&amp;#254;              Small thorn, Icelandic
+&#255;&amp;#255;              Small y, dieresis or umlaut mark
+
+

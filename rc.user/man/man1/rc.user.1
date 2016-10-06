@@ -1,0 +1,217 @@
+.TH rc.user 1
+.\"  SCOPE rc.user ZZZZ
+.SH NAME 
+rc.user \- highly portable Borne family profiles 
+.
+.SH SYNOPSIS
+Not intended to be executed manually, but from within per-shell 
+configuration file.
+
+.LP
+To patch current login after installed:
+.LP
+.RS 4
+rc.user/install.sh
+.RE
+
+
+.SH DESCRIPTION
+This is not a program but a style of configuring shells.
+The
+.B rc.user
+family of shell configurations addresses the problems of users that
+maintain logins on different systems,
+often with different shells,
+and sometimes with different vintages of shells.
+.
+.LP
+Historically such diverse shells requires maintaining a number of 
+configurations in parallel or allowing growing differences between 
+logins to accumulate over time.
+.
+.LP
+With
+.BR rc.user ,
+users can maintain one master profile that is copied to other systems
+as appropriate.
+To allow for the diversity of configurations,
+these configurations are modeled after the ZZZ series of initilization scripts.
+The
+.B rc.user
+directory contains a series of directories whose name starts with 
+a number and includes a descriptive name.
+.LP
+The
+.B
+rc.user/rc.sh
+script is invoked at the start of each shell to perform both initial
+login and more conventional per-shell configurations.
+This script scans the nested directory names, in order,
+to determine if they are approprate for the current system.
+If so they are run and the fact they were run is remembered to 
+assure login-specific configurations are only done once,
+during the first (login) shell's configuration.
+.
+.SH OPTIONS
+.SH \0\0Directory Names
+The options, such as they are, are the series of directories 
+within
+.B rc.user/
+for specific configurations.
+.LP
+The names of these directories must follow the following rules:
+.IP "\01." \w'\01.i'u
+Names start with exactly two digits.
+.IP "\02."
+The digits are followed by either a hyphen or a period "break character".
+.IP "\03."
+The break character is followed by a unique name that should be both 
+short and appropriately descriptive.
+.LP
+These directories are processed in order of ascending numbers.
+While multiple directories often have the same number,
+the order directories with the same number are processed in 
+must be considered unpredictable.
+.LP
+If the break character is a hyphen,
+then the directory is always processed.
+If the break character is a period,
+then the directory is only processed if the name after the period 
+matches a local condition.
+Local conditions include:
+.IP "\0\(bu" \w'\0\(bu\&i'u
+Name of shell (e.g.,
+.BR bash ,
+.BR ksh ).
+.IP "\0\(bu"
+Name of host (as returned by
+.BR uname ).
+.IP "\0\(bu"
+Users login name.
+.IP "\0\(bu"
+Name of operating system (as returned by
+.BR uname ).
+.LP
+The use of conditional directories allows users to maintain 
+configurations specific to specific hosts, shells, etc.,
+in a common directory.
+These can even be consistently installed on all systems logged in to
+without adversely impacting configurations as they will be ignored
+on inapproprate systems.
+.
+.LP
+The suggested number use follows:
+.IP "\050" \w'\000\&i'u
+Generic configurations.
+Any generic configuration that might be bundled in 
+.B  rc.user
+should go. 
+.IP "\010" 
+Reserved for early configurations,
+such as shell configurations,
+that have a strong potential to impact subsequent configuraitons.
+.IP "\000" 
+For special configurations that must impact
+.B 10
+configurations.
+.IP "\070" 
+Configurations for specific companies,
+etc.
+Much like the
+.B 50
+generic configurations,
+but this is where configurations built for specific hosts,
+companies,
+or people should go.
+.IP "\099" 
+Final configurations.
+Where configurations that must run after all other configurations go.
+This should be reserved for configurations that run programs for the
+user on login,
+such as starting X-windows in some environments.
+Such scripts often exit to log the user off after the special program 
+exits.
+Such special programs are often started with
+.IR exec (2)
+style commands to assure any type of exit performs an appropriate logoff.
+.
+.SH \0\Individual Configurations
+The configurations within each directory is controlled by a 
+.B rc.sh
+file within.
+Such files are "sourced" to perform the configurations.
+If the file is missing, or unreadable, no configurations are 
+performed for the directory.
+.LP
+Each of these
+.B rc.sh
+scripts add to PATH, MANPATH, or other environment variables as approprate.
+They may set any configuration that is approprate for the current condition.
+.LP
+Any "bin/", "man/", or other directories are found in same directory the
+.B rc.sh
+file is in.
+.
+.SH ENVIRONMENT
+.LP
+Environment variables referenced by
+.BR rc.user .
+.LP
+.IP \0\0\&HOME \w'\0\0HELLO_WORLD'u
+user's home directory
+.IP \0\0\&LOGNAME'
+user's login name
+.IP \0\0\&TERM
+user's terminal type
+.IP \0\0\&LINENO
+current line number of command (used within internal traps)
+.IP \0\0\&rcDIR
+optional variable identifying where the
+.B rc.user
+directory is to be found.
+Defaults to
+.BR $HOME/rc.user .
+.
+.LP
+Environment variables set by
+.BR rc.user .
+.LP
+.IP \0\0\&rcLOCAL \w'\0\0HELLO_WORLD'u
+maintains list of colon-separated 
+.B rc.user directories that have already been processed.
+.IP \0\0\&rcU_HOSTNAME
+name of host from
+.BR uname .
+Sometimes a fully qualified host name.
+Sometmes not.
+.IP \0\0\&rcU_HOSTNAME0
+Hostname in
+.B rcU_HOSTNAME
+without any qualification.
+.br
+.IP \0\0\&rcU_OS
+name of os, as returned by
+.BR uname .
+.
+.LP
+The following extenal variables are defined when
+.B rc.user/rc.sh
+is running,
+but not after configurations complete
+(or any prior values are restored).
+They are intended for use within the various configuration scripts.
+.IP \0\0\&rcDIR \w'\0\0HELLO_WORLD'u
+path to 
+.B rc.user
+directory.
+.IP \0\0\&rcHOME
+path to directory
+.B rc.user
+is found in.
+Typically the same value as
+.BR $HOME ,
+but for some systems this is different.
+.IP \0\0\&rcWORKDIR
+name of configuration directory now being used.
+.IP \0\0\&rcWORKPATH
+absolute path name to configuration directory now being used.

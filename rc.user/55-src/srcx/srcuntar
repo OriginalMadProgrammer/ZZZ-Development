@@ -1,0 +1,59 @@
+#! /bin/csh
+## find all compression directories and tar them up. then delete.
+
+set ExecDir = $0
+set ExecDir = $ExecDir:h
+if ( $0 !~ */* ) set ExecDir = "."
+set Mode='tar';
+source $ExecDir/src.cfg
+if ( $status ) exit($status);
+
+if ( ! $?ArgK ) set ArgK = "";
+if ( ."$ArgK" != .'' ) then
+    #-k forces recursive
+    set pruneSw = "";
+  else
+    #lack of -k forces only current directory
+    set pruneSw = "-prune";
+  endif
+
+#### cd $HOME
+if ( $0 =~ *untar ) then
+    set rcsDirs = ( `find * -print $pruneSw | grep '\<'"$ARCHIVE$tarSuffix"'$'` );
+  else
+    set rcsDirs = ( `find * -type d -print $pruneSw | grep '\<RCS$'` );
+endif
+
+set pwd = `pwd`;
+foreach dir ( $rcsDirs )
+# {
+    cd $pwd || exit 1
+    if ( $0 =~ *untar ) then
+	echo "uncompressing $dir"
+	cd `dirname $dir` || exit 1
+	if ( ! -d $ARCHIVE ) then
+		${DebugSw}mkdir $ARCHIVE || exit 1
+		${DebugSw}chmod go-rwx,u+rwx $ARCHIVE || exit 1
+	    endif
+	${DebugSw}tar -xzvf `basename $dir` || exit 1
+	${DebugSw}chmod go-rwx $ARCHIVE || exit 1
+	${DebugSw}rm -fr $dir
+     else
+	cd $dir/.. || exit 1;		#select parent dir to RCS dir
+	set tar = $ARCHIVE$tarSuffix;	#path name of tar file
+	if ( -f $tar ) then
+		rm -f $tar || exit 1
+	    endif
+	echo "compressing $dir"
+	${DebugSw}touch $tar || exit 1
+	${DebugSw}chmod go-rwx,u+rw $tar || exit 1
+	${DebugSw}tar -czvf $tar $ARCHIVE || exit 1
+	${DebugSw}rm -fr $ARCHIVE
+	${DebugSw}chmod a-w $tar || exit 1
+	cd $pwd || exit 1
+	ls -l $dir$tarSuffix
+     endif
+#  
+  end
+
+echo "successful completion"

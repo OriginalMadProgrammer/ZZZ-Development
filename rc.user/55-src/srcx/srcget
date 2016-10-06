@@ -1,0 +1,12 @@
+#! /bin/csh
+#  srcget - get source file
+#     1993 by Gilbert Healton (based on 1985 scripts, which is why it is csh)
+#	@(#)srcget	4.2 20 Mar 1997 17:36:53
+set ExecDir = $0
+set ExecDir = $ExecDir:h
+if ( $0 !~ */* ) set ExecDir = "."
+
+set Mode = "get";
+source $ExecDir/srcedit
+exit($status)
+

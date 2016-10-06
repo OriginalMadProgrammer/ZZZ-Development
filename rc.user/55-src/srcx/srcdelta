@@ -1,0 +1,146 @@
+#! /bin/csh
+#  apply source edit via sccs or rcs with common user interface
+#     1993 by Gilbert Healton (based on 1985 scripts, which is why it is csh)
+#	@(#)srcdelta	4.2 20 Mar 1997 17:36:52
+set ExecDir = $0
+set ExecDir = $ExecDir:h
+if ( $0 !~ */* ) set ExecDir = "."
+if ( ! $?Mode ) set Mode = "delta";
+source $ExecDir/src.cfg
+if ( $status ) exit($status);
+if ( $Mode != delget  &&  $Mode != create ) set ArgK = "";
+if ( ! $?ArgK ) set ArgK = "";
+
+if ( $#argv < 1 ) then
+	cat <<EOF
+src$Mode - apply edit to source file using either sccs or rcs
+EOF
+	if ( $Mode = "deledit" ) echo "	after the delta, an srcedit is applied"
+	if ( $Mode = "deledit" ) echo "	after the delta, an srcget is applied"
+	cat <<EOF
+   src$Mode <file list>
+      file list - list of all files to update OR the .up files
+EOF
+	exit(0);
+  endif
+
+set Rev = "";		#suppose no revision informatoin
+if ( $?ArgRev ) then
+	set Rev=$ArgRev;
+  endif
+
+@ Success = 0;
+while( $#argv )
+# { For each file, which MAY be an .up file indirectly naming the file
+    set File = `echo $argv[1] | sed -e "s/\.up$dol//"`;	#trash any .up extension
+    set FileRaw = "$1";		#save original name, unchanged
+    shift argv;			#discard
+
+    if ( $File =~ "-r"* ) then
+	#set up revision level (sticky: applys to all following till next -r)
+	set Rev = `echo $File | sed -e 's/^-r//'`;
+	if ( "$Rev" == "" ) then
+	    set Rev = $1;
+	    shift argv
+	  endif
+      endif
+
+    echo "   === $File ==="
+
+    if ( $Mode != "create"  &&  $Mode != "enter" ) then
+    # { verify things look good
+	if ( ! -f $ARCHIVE/$ARprefix$File$ARsuffix ) then 
+	    sh -c "echo 1>&2 'FILE $File IS NOT ARCHIVED IN $ARCHIVE DIRECTORY'"
+	    continue
+	  endif
+	if ( $?AReditfix ) then
+	    if ( ! -f $ARCHIVE/$AReditfix$File$ARsuffix ) then
+		    sh -c "echo 1>&2 'FILE $File IS NOT BEING EDITED'"
+		    continue
+	      endif
+	  endif
+      endif
+    # }
+    if ( ! -w $File ) then
+	    sh -c "echo 1>&2 'WRITABLE $File DOES NOT EXIST IN CURRENT DIRECTORY'"
+	    continue
+      endif
+    if ( -f ${File}.up ) then
+	    if ( ! -w ${File}.up ) then
+		    sh -c "echo 1>&2 'READ ONLY ${File}.up EXISTS IN CURRENT DIRECTORY'"
+		    continue
+	      endif
+	    if ( -z ${File}.up ) then
+		    sh -c "echo 1>&2 'EMPTY ${File}.up FILE'"
+		    continue
+	      endif
+      else
+	    sh -c "echo 1>&2 'REQUIRE ${File}.up FILE TO DESCRIBE CHANGES'"
+	    continue
+      endif	
+
+    set ExecSw;
+    if ( -x $File  ) then
+    # {  -rwxrw-rw-
+	set Tmp = `ls -l $File | head -1 | awk '{print $1}'`	
+	set ExecSw = `echo $Tmp | sed -e 's/^...//' -e 's/......$//' -e 's/-//' -e 's/[xs]/u/'`
+	set ExecSw = $ExecSw`echo $Tmp | sed -e 's/^......//' -e 's/...$//' -e 's/-//' -e 's/[xs]/g/'`
+	set ExecSw = $ExecSw`echo $Tmp | sed -e 's/^.........//' -e 's/-//' -e 's/[xs]/o/'`
+      endif
+    # }
+
+
+    set rev = "";
+    if ( "$Rev" != "" ) set rev = "-r$Rev";
+    if ( $SccsSw ) then
+	    if ( -f ${File}.up@ ) rm -f ${File}.up@;
+	    sed -e 's/$/\\/' -e '$s/\\$//' <${File}.up >${File}.up@
+	    if ( $Mode != "create" &&  $Mode != "enter" ) then
+		$DebugSw sccs delta $sArgs $File <${File}.up@
+		set xstatus = $status
+	      else
+		$DebugSw sccs $Mode$ArgK $sArgs $rev $File 
+		set xstatus = $status
+		if ( "$rev" == "" ) set rev = "-r1.1";
+		$DebugSw sccs cdc $rev <${File}.up@ $File
+	      endif
+	    rm -f ${File}.up@;
+      else
+	    $DebugSw ci $File $rev <${File}.up
+	    set xstatus = $status
+      endif
+    if ( ! $xstatus ) then
+	    @ Success += 1
+	    if ( -f $ARCHIVE/srcedit.cfg ) source $ARCHIVE/srcedit.cfg;
+	    if ( $?UpSave ) then
+		    $DebugSw mv ${file}.up $UpSave/
+	      else
+		    $DebugSw rm -f ${File}.up
+	      endif
+	    if ( "$ExecSw" != "" ) then
+		$DebugSw chmod a-x,$ExecSw+x $ARCHIVE/$ARprefix$File$ARsuffix
+	      endif
+	    if ( $Mode == "deledit"  ||  $Mode == "enter" ) then
+		$DebugSw srcedit $rev $FileRaw
+	      else
+		$DebugSw srcget $rev$ArgK $FileRaw
+ 	      endif
+#	    if ( $SccsSw ) then
+#		if ( $Mode == "deledit" ) sccs edit $sArgs $File
+#		if ( $Mode == "delget" )  sccs get  $sArgs $File
+#	      else
+#		if ( $Mode == "deledit" ) co -l $File
+#		if ( $Mode == "delget" )  co    $File
+#	      endif
+      endif
+  end
+# }
+
+if ( $Success == 0 ) then
+	sh -c "echo 1>&2 'NO FILES WERE UPDATED'"
+	exit(1)
+   endif
+
+exit(0);
+
+#end: srcdelta

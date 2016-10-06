@@ -1,0 +1,129 @@
+#! /bin/csh
+#  edit source files via sccs or rcs with common user interface
+#     1993 by Gilbert Healton (based on 1985 scripts, which is why it is csh)
+#	@(#)srcedit	4.3 20 Mar 1997 17:47:41
+set ExecDir = $0
+set ExecDir = $ExecDir:h
+if ( $0 !~ */* ) set ExecDir = "."
+if ( ! $?Mode ) set Mode = "edit";
+source $ExecDir/src.cfg
+if ( $status ) exit($status);
+
+if ( $Mode == "edit" ) set ArgK = ""
+if ( ! $?ArgK ) set ArgK = "";
+
+if ( $#argv < 1 ) then
+	cat <<EOF
+src$Mode - $Mode a source file using either sccs or rcs, as appropriate to system
+   srcedit <file> [<rev>]
+      file - file name to $Mode. Must supply.
+      rev  - revision level to use. Optional.
+EOF
+	exit(0);
+  endif
+
+set Rev = "";		#suppose no revision informatoin
+if ( $?ArgRev ) then
+	set Rev=$ArgRev;
+  endif
+
+if ( "$argv" == "=all=" ) then
+# { get/edit ALL archive files in the directory
+    set argv = `ls -d $ARCHIVE/${ARprefix}*${ARsuffix} | sed -e "s'$ARCHIVE/${ARprefix}''" -e "s'${ARsuffix}''"`
+    if ( $#argv == 0 )
+    {
+	sh -c "echo 1>&2 '-all- DID NOT FIND ANY FILES IN ./$ARCHIVE/'"
+	exit(1);
+    }
+# }
+  endif
+
+while ( $#argv )
+# {
+    set File = `echo $1 | sed -e 's/\.up$//'`;	#wipe any .up suffix
+    shift argv;
+    if ( "$DebugSw" != "" ) echo "File=$File"
+
+    if ( $File =~ "-r"* ) then
+	#set up revision level (sticky: applys to all following till next -r)
+	set Rev = `echo $File | sed -e 's/^-r//'`;
+	if ( "$Rev" == "" ) then
+	    set Rev = $1;
+	    shift argv
+	  endif
+      endif
+
+    if ( $VerboseSw ) echo "&File=$File"
+    if ( $VerboseSw && "$Rev" != "" ) echo "&Rev=$Rev"
+
+    #verify things look good
+    if ( ! -f $ARCHIVE/$ARprefix$File$ARsuffix ) then
+	    sh -c "echo 1>&2 'FILE $File IS NOT ARCHIVED IN $ARCHIVE DIRECTORY'"
+	    continue
+      endif
+    if ( $?AReditfix  &&  $Mode == "edit" ) then
+	    if ( -f $ARCHIVE/$AReditfix$File$ARsuffix ) then
+		    sh -c "echo 1>&2 'FILE $File IS ALREADY BEING EDITED'"
+		    sh -c "cat 1>&2 $ARCHIVE/$AReditfix$File$ARsuffix"
+		    continue
+	      endif
+      endif
+    if ( -w $File ) then
+	    sh -c "echo 1>&2 'WRITABLE $File EXISTS IN CURRENT DIRECTORY'"
+	    continue
+      endif
+    if ( -f ${File}.up && $Mode == "edit" ) then
+	    if ( ! -w ${File}.up ) then
+		    sh -c "echo 1>&2 'READ ONLY ${File}.up EXISTS IN CURRENT DIRECTORY'"
+		    continue
+	      endif
+	    if ( ! -z ${File}.up ) then
+		    sh -c "echo 1>&2 'CAUTION: non-empty ${File}.up exists'"
+	      endif
+      endif	
+
+    test -h $File
+    if ( $status == 0 ) then 
+	echo "removing symbolic link of $File"; rm -f $File; 
+      endif
+    set rev = "";
+    if ( "$Rev" != "" ) set rev = "-r$Rev";
+    if ( $SccsSw ) then
+	    $DebugSw sccs $Mode $sArgs$ArgK $rev $File	
+	    set xstatus = $status
+      else
+	    #need to do REV stuff
+	    set Lock = "";		#suppose srcget
+	    if ( $Mode == "edit" ) set Lock = " -l"
+	    $DebugSw co$Lock $rev $File
+	    set xstatus = $status
+      endif
+    if ( ! $xstatus ) then
+	    if ( $Mode != "edit" ) then
+		$DebugSw chmod a-w,a+r $File;	#ensure read-only
+		if ( "$ArgK" != "" ) $DebugSw chmod u+w $File; #or write by user
+	      else
+		$DebugSw touch ${File}.up;	#only create .up for edit
+		$DebugSw chmod a+r $File;	#ensure read-only
+	      endif
+
+	    set ExecSw;
+	    if ( -x $ARCHIVE/$ARprefix$File$ARsuffix ) then
+	    # {  -rwxrw-rw-
+		set Tmp = `ls -l $File | head -1 | awk '{print $1}'`	
+		set ExecSw = `echo $Tmp | sed -e 's/^...//' -e 's/......$//' -e 's/-//' -e 's/[xs]/u/'`
+		set ExecSw = $ExecSw`echo $Tmp | sed -e 's/^......//' -e 's/...$//' -e 's/-//' -e 's/[xs]/g/'`
+		set ExecSw = $ExecSw`echo $Tmp | sed -e 's/^.........//' -e 's/-//' -e 's/[xs]/o/'`
+		chmod a-x,$ExecSw+x $File
+		if ( -f $ARCHIVE/srcedit.cfg ) source $ARCHIVE/srcedit.cfg;
+		if ( "$DebugSw" != "" ) echo "ExecSw=$ExecSw"
+	      endif
+	    # }
+	
+	    if ( -f $ARCHIVE/srcget.cfg ) source $ARCHIVE/srcget.cfg;
+
+      endif
+  end
+# }
+
+#end: srcedit

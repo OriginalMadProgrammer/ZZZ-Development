@@ -1,0 +1,28 @@
+#! /bin/ksh
+
+if [ -z "$1" ]; then
+	echo "Usage: $0 [-C] source_file"
+	exit 1
+fi
+DIFFOPT="-c"
+case "$1" in
+-C)	DIFFOPT=; shift;;
+esac
+
+if [ -f .archives ]; then
+	ARCHIVES=`cat .archives`
+fi
+echo ${ARCHIVES}/`cat .prefix` > /tmp/$$
+PFILE=`cat /tmp/$$`/p.$1
+if [ -s $PFILE ] ; then
+	fgrep $LOGNAME $PFILE | read OLD REST
+	echo sget -p -S -r$OLD $1 > /tmp/old$$
+	sget -p -S -r$OLD $1 > /tmp/old$$ 2>/dev/null
+	echo Comparing current version of $1 with version $OLD
+	diff $DIFFOPT /tmp/old$$ $1|more
+	rm -f /tmp/old$$
+else
+	echo $1 is not checked out for edit.
+fi
+
+rm /tmp/$$

@@ -1,0 +1,12 @@
+#! /bin/csh
+#  srcdelget - apply source edit via sccs or rcs with common user interface
+#     1993 by Gilbert Healton (based on 1985 scripts, which is why it is csh)
+#	@(#)srccreate	4.2 20 Mar 1997 17:36:50
+set ExecDir = $0
+set ExecDir = $ExecDir:h
+if ( $0 !~ */* ) set ExecDir = "."
+
+set Mode = "create";
+source $ExecDir/srcdelta
+exit($status)
+
